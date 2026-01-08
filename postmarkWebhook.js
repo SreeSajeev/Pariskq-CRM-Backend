@@ -5,11 +5,6 @@ import bodyParser from 'body-parser';
 import { createClient } from '@supabase/supabase-js';
 import { processRawEmails } from './autoTicketProcessor.js';
 
-setInterval(() => {
-  processRawEmails();
-}, 60 * 1000); // every 1 minute
-
-
 const app = express();
 app.use(bodyParser.json());
 
@@ -57,5 +52,9 @@ app.post('/postmark-webhook', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+
+setInterval(() => {
+  processRawEmails();
+}, 60 * 1000); // every 1 minute
 
 
