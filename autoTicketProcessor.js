@@ -20,10 +20,11 @@ function generateTicketNumber() {
 
 function parseEmail(raw) {
   const text = `${raw.subject || ''}\n${raw.payload?.TextBody || ''}`;
+
   const extract = (regex) => text.match(regex)?.[1]?.trim() || null;
 
   return {
-    complaint_id: extract(/Record ID\s*(\w+)/i),
+    complaint_id: extract(/Record ID\s*([A-Z0-9]+)/i),
     vehicle_number: extract(/VEHICLE\s*([A-Z0-9]+)/i),
     category: extract(/Category\s*(.+)/i) || 'UNKNOWN',
     issue_type: extract(/Item Name\s*(.+)/i) || 'GENERAL',
@@ -38,8 +39,8 @@ function calculateConfidence(parsed) {
 
   if (parsed.complaint_id) score += 30;
   if (parsed.vehicle_number) score += 30;
-  if (parsed.category !== 'UNKNOWN') score += 20;
-  if (parsed.issue_type !== 'GENERAL') score += 20;
+  if (parsed.category && parsed.category !== 'UNKNOWN') score += 20;
+  if (parsed.issue_type && parsed.issue_type !== 'GENERAL') score += 20;
 
   return {
     score,
@@ -50,7 +51,7 @@ function calculateConfidence(parsed) {
 async function findDuplicate(parsed) {
   if (!parsed.complaint_id || !parsed.vehicle_number) return null;
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('tickets')
     .select('id')
     .eq('complaint_id', parsed.complaint_id)
@@ -60,6 +61,11 @@ async function findDuplicate(parsed) {
     .in('status', ['OPEN', 'ASSIGNED', 'NEEDS_REVIEW'])
     .limit(1);
 
+  if (error) {
+    console.error('Duplicate check failed:', error);
+    return null;
+  }
+
   return data?.[0] || null;
 }
 
@@ -68,39 +74,56 @@ async function findDuplicate(parsed) {
 ===================================================== */
 
 async function parseRawEmails() {
-  const { data: rawEmails } = await supabase
+  const { data: rawEmails, error } = await supabase
     .from('raw_emails')
     .select('*')
     .eq('ticket_created', false)
-    .is('processing_status', null)
+    .in('processing_status', [null, 'PENDING'])
     .limit(10);
 
-  if (!rawEmails?.length) return;
+  if (error) {
+    console.error('Failed to fetch raw_emails:', error);
+    return;
+  }
+
+  if (!rawEmails || rawEmails.length === 0) return;
 
   for (const email of rawEmails) {
-    const parsed = parseEmail(email);
-    const confidence = calculateConfidence(parsed);
+    try {
+      const parsed = parseEmail(email);
+      const confidence = calculateConfidence(parsed);
 
-    await supabase.from('parsed_emails').insert({
-      raw_email_id: email.id,
-      complaint_id: parsed.complaint_id,
-      vehicle_number: parsed.vehicle_number,
-      category: parsed.category,
-      issue_type: parsed.issue_type,
-      location: parsed.location,
-      reported_at: parsed.reported_at,
-      remarks: parsed.remarks,
-      confidence_score: confidence.score,
-      needs_review: confidence.needs_review,
-      ticket_created: false
-    });
+      await supabase.from('parsed_emails').insert({
+        raw_email_id: email.id,
+        complaint_id: parsed.complaint_id,
+        vehicle_number: parsed.vehicle_number,
+        category: parsed.category,
+        issue_type: parsed.issue_type,
+        location: parsed.location,
+        reported_at: parsed.reported_at,
+        remarks: parsed.remarks,
+        confidence_score: confidence.score,
+        needs_review: confidence.needs_review,
+        ticket_created: false
+      });
 
-    await supabase
-      .from('raw_emails')
-      .update({ processing_status: 'PARSED' })
-      .eq('id', email.id);
+      await supabase
+        .from('raw_emails')
+        .update({ processing_status: 'PARSED' })
+        .eq('id', email.id);
 
-    console.log(`Parsed raw_email ${email.id}`);
+      console.log(`✅ Parsed raw_email ${email.id}`);
+    } catch (err) {
+      console.error(`❌ Parsing failed for raw_email ${email.id}`, err);
+
+      await supabase
+        .from('raw_emails')
+        .update({
+          processing_status: 'ERROR',
+          processing_error: err.message
+        })
+        .eq('id', email.id);
+    }
   }
 }
 
@@ -109,80 +132,89 @@ async function parseRawEmails() {
 ===================================================== */
 
 async function createTicketsFromParsedEmails() {
-  const { data: parsedRows } = await supabase
+  const { data: parsedRows, error } = await supabase
     .from('parsed_emails')
     .select('*, raw_emails(*)')
     .eq('ticket_created', false)
     .limit(10);
 
-  if (!parsedRows?.length) return;
+  if (error) {
+    console.error('Failed to fetch parsed_emails:', error);
+    return;
+  }
+
+  if (!parsedRows || parsedRows.length === 0) return;
 
   for (const parsed of parsedRows) {
-    const duplicate = await findDuplicate(parsed);
+    try {
+      const duplicate = await findDuplicate(parsed);
 
-    if (duplicate) {
-      await supabase
-        .from('raw_emails')
-        .update({
-          ticket_created: true,
-          processing_status: 'DUPLICATE',
-          linked_ticket_id: duplicate.id
-        })
-        .eq('id', parsed.raw_email_id);
+      if (duplicate) {
+        await supabase
+          .from('raw_emails')
+          .update({
+            ticket_created: true,
+            processing_status: 'DUPLICATE',
+            linked_ticket_id: duplicate.id
+          })
+          .eq('id', parsed.raw_email_id);
+
+        await supabase
+          .from('parsed_emails')
+          .update({ ticket_created: true })
+          .eq('id', parsed.id);
+
+        console.log(`⚠️ Duplicate detected for raw_email ${parsed.raw_email_id}`);
+        continue;
+      }
+
+      const status =
+        parsed.confidence_score >= 95
+          ? 'OPEN'
+          : parsed.confidence_score >= 80
+          ? 'NEEDS_REVIEW'
+          : 'DRAFT';
+
+      const ticketNumber = generateTicketNumber();
+
+      await supabase.from('tickets').insert({
+        ticket_number: ticketNumber,
+        status,
+        complaint_id: parsed.complaint_id,
+        vehicle_number: parsed.vehicle_number,
+        category: parsed.category,
+        issue_type: parsed.issue_type,
+        location: parsed.location,
+        opened_by_email: parsed.raw_emails.from_email,
+        opened_at: new Date().toISOString(),
+        raw_email_id: parsed.raw_email_id,
+        confidence_score: parsed.confidence_score,
+        needs_review: parsed.needs_review,
+        source: 'EMAIL'
+      });
 
       await supabase
         .from('parsed_emails')
         .update({ ticket_created: true })
         .eq('id', parsed.id);
 
-      console.log(`Duplicate detected for raw_email ${parsed.raw_email_id}`);
-      continue;
+      await supabase
+        .from('raw_emails')
+        .update({
+          ticket_created: true,
+          processing_status: status
+        })
+        .eq('id', parsed.raw_email_id);
+
+      console.log(`🎫 Ticket ${ticketNumber} created`);
+    } catch (err) {
+      console.error(`❌ Ticket creation failed for parsed_email ${parsed.id}`, err);
     }
-
-    const status =
-      parsed.confidence_score >= 95
-        ? 'OPEN'
-        : parsed.confidence_score >= 80
-        ? 'NEEDS_REVIEW'
-        : 'DRAFT';
-
-    const ticketNumber = generateTicketNumber();
-
-    await supabase.from('tickets').insert({
-      ticket_number: ticketNumber,
-      status,
-      complaint_id: parsed.complaint_id,
-      vehicle_number: parsed.vehicle_number,
-      category: parsed.category,
-      issue_type: parsed.issue_type,
-      location: parsed.location,
-      opened_by_email: parsed.raw_emails.from_email,
-      opened_at: new Date().toISOString(),
-      raw_email_id: parsed.raw_email_id,
-      confidence_score: parsed.confidence_score,
-      needs_review: parsed.needs_review,
-      source: 'EMAIL'
-    });
-
-    await supabase
-      .from('parsed_emails')
-      .update({ ticket_created: true })
-      .eq('id', parsed.id);
-
-    await supabase
-      .from('raw_emails')
-      .update({
-        ticket_created: true,
-        processing_status: status
-      })
-      .eq('id', parsed.raw_email_id);
-
-    console.log(`Ticket ${ticketNumber} created`);
   }
 }
 
 /* =====================================================
-   RUNNER
+   RUNNER (CALLED BY INTERVAL)
 ===================================================== */
 
 export async function runAutoTicketProcessor() {
