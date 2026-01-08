@@ -8,105 +8,168 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-/* ------------------------
-   TICKET NUMBER GENERATOR
-------------------------- */
+/* =====================================================
+   HELPERS
+===================================================== */
+
 function generateTicketNumber() {
-  const date = new Date();
-  const ymd = date.toISOString().slice(0, 10).replace(/-/g, '');
-  const random = Math.floor(1000 + Math.random() * 9000);
-  return `PKQ-${ymd}-${random}`;
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const rand = Math.floor(1000 + Math.random() * 9000);
+  return `PKQ-${date}-${rand}`;
 }
 
-/* ------------------------
-   SIMPLE RULE-BASED PARSER
-------------------------- */
-function parseEmail(rawEmail) {
-  const text =
-    `${rawEmail.subject || ''} ${rawEmail.payload?.TextBody || ''}`;
+function parseEmail(raw) {
+  const text = `${raw.subject || ''}\n${raw.payload?.TextBody || ''}`;
 
-  const vehicleMatch =
-    text.match(/[A-Z]{2}\s?\d{2}\s?[A-Z]{2}\s?\d{4}/);
-
-  const complaintMatch =
-    text.match(/CCM\d+|CMP-\d+/);
+  const extract = (regex) => text.match(regex)?.[1]?.trim() || null;
 
   return {
-    vehicle_number: vehicleMatch?.[0] || null,
-    complaint_id: complaintMatch?.[0] || null,
-    category: text.toUpperCase().includes('MDVR') ? 'MDVR' : 'UNKNOWN',
-    issue_type: text.toLowerCase().includes('offline')
-      ? 'DEVICE_OFFLINE'
-      : 'GENERAL',
-    location: rawEmail.payload?.FromFull?.Name || null,
-    opened_by_email: rawEmail.from_email || null,
-    remarks: rawEmail.payload?.TextBody || rawEmail.subject
+    complaint_id: extract(/Record ID\s*(\w+)/i),
+    vehicle_number: extract(/VEHICLE\s*([A-Z0-9]+)/i),
+    category: extract(/Category\s*(.+)/i) || 'UNKNOWN',
+    issue_type: extract(/Item Name\s*(.+)/i) || 'GENERAL',
+    location: extract(/Location\s*(.+)/i),
+    remarks: extract(/Remarks\s*(.+)/i),
+    reported_at: extract(/Submit Date\s*(.+)/i)
   };
 }
 
-/* ------------------------
-   MAIN PROCESSOR
-------------------------- */
-export async function processRawEmails() {
-  console.log('Running auto ticket processor');
+function calculateConfidence(parsed) {
+  let score = 0;
 
-  const { data: emails, error } = await supabase
+  if (parsed.complaint_id) score += 30;
+  if (parsed.vehicle_number) score += 30;
+  if (parsed.category !== 'UNKNOWN') score += 20;
+  if (parsed.issue_type !== 'GENERAL') score += 20;
+
+  return {
+    score,
+    needs_review: score < 95
+  };
+}
+
+async function findDuplicate(parsed) {
+  if (!parsed.complaint_id || !parsed.vehicle_number) return null;
+
+  const { data } = await supabase
+    .from('tickets')
+    .select('id')
+    .eq('complaint_id', parsed.complaint_id)
+    .eq('vehicle_number', parsed.vehicle_number)
+    .eq('category', parsed.category)
+    .eq('issue_type', parsed.issue_type)
+    .in('status', ['OPEN', 'ASSIGNED', 'NEEDS_REVIEW'])
+    .limit(1);
+
+  return data?.[0] || null;
+}
+
+/* =====================================================
+   PHASE 1 — RAW → PARSED
+===================================================== */
+
+async function parseRawEmails() {
+  const { data: emails } = await supabase
     .from('raw_emails')
     .select('*')
     .eq('ticket_created', false)
-    .order('created_at', { ascending: true })
+    .is('processing_status', null)
     .limit(10);
 
-  if (error) {
-    console.error('Failed to fetch raw emails:', error);
-    return;
-  }
-
-  if (!emails || emails.length === 0) {
-    console.log('No raw emails to process');
-    return;
-  }
-
-  for (const email of emails) {
-    console.log(`Processing raw_email ${email.id}`);
-
+  for (const email of emails || []) {
     const parsed = parseEmail(email);
-    const ticketNumber = generateTicketNumber();
+    const confidence = calculateConfidence(parsed);
 
-    const { error: ticketError } = await supabase
-      .from('tickets')
-      .insert({
-        ticket_number: ticketNumber,          // REQUIRED
-        status: 'OPEN',                       // REQUIRED
-        complaint_id: parsed.complaint_id,
-        vehicle_number: parsed.vehicle_number,
-        category: parsed.category,
-        issue_type: parsed.issue_type,
-        location: parsed.location,
-        opened_by_email: parsed.opened_by_email,
-        opened_at: new Date().toISOString(),
-        raw_email_id: email.id                // FK (you added this)
-      });
+    await supabase.from('parsed_emails').insert({
+      raw_email_id: email.id,
+      complaint_id: parsed.complaint_id,
+      vehicle_number: parsed.vehicle_number,
+      category: parsed.category,
+      issue_type: parsed.issue_type,
+      location: parsed.location,
+      reported_at: parsed.reported_at,
+      remarks: parsed.remarks,
+      confidence_score: confidence.score,
+      needs_review: confidence.needs_review
+    });
 
-    if (ticketError) {
-      console.error(
-        `Ticket creation failed for raw_email ${email.id}:`,
-        ticketError
-      );
+    await supabase
+      .from('raw_emails')
+      .update({ processing_status: 'PARSED' })
+      .eq('id', email.id);
+
+    console.log(`Parsed raw_email ${email.id}`);
+  }
+}
+
+/* =====================================================
+   PHASE 2 — PARSED → TICKET
+===================================================== */
+
+async function createTickets() {
+  const { data: parsedRows } = await supabase
+    .from('parsed_emails')
+    .select('*, raw_emails(*)')
+    .limit(10);
+
+  for (const parsed of parsedRows || []) {
+    const duplicate = await findDuplicate(parsed);
+
+    if (duplicate) {
+      await supabase
+        .from('raw_emails')
+        .update({
+          ticket_created: true,
+          processing_status: 'DUPLICATE',
+          linked_ticket_id: duplicate.id
+        })
+        .eq('id', parsed.raw_email_id);
+
       continue;
     }
+
+    const status =
+      parsed.confidence_score >= 95
+        ? 'OPEN'
+        : parsed.confidence_score >= 80
+        ? 'NEEDS_REVIEW'
+        : 'DRAFT';
+
+    const ticketNumber = generateTicketNumber();
+
+    await supabase.from('tickets').insert({
+      ticket_number: ticketNumber,
+      status,
+      complaint_id: parsed.complaint_id,
+      vehicle_number: parsed.vehicle_number,
+      category: parsed.category,
+      issue_type: parsed.issue_type,
+      location: parsed.location,
+      opened_by_email: parsed.raw_emails.from_email,
+      opened_at: new Date().toISOString(),
+      raw_email_id: parsed.raw_email_id,
+      confidence_score: parsed.confidence_score,
+      needs_review: parsed.needs_review,
+      source: 'EMAIL'
+    });
 
     await supabase
       .from('raw_emails')
       .update({
         ticket_created: true,
-        processing_status: 'TICKET_CREATED',
-        processed_at: new Date().toISOString()
+        processing_status: status
       })
-      .eq('id', email.id);
+      .eq('id', parsed.raw_email_id);
 
-    console.log(
-      `Ticket ${ticketNumber} created for raw_email ${email.id}`
-    );
+    console.log(`Ticket ${ticketNumber} created`);
   }
+}
+
+/* =====================================================
+   RUNNER (THIS IS THE ONLY THING THAT LOOPS)
+===================================================== */
+
+export async function runAutoTicketProcessor() {
+  await parseRawEmails();
+  await createTickets();
 }

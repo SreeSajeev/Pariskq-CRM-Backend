@@ -4,7 +4,7 @@ dotenv.config();
 import express from 'express';
 import bodyParser from 'body-parser';
 import { createClient } from '@supabase/supabase-js';
-import { processRawEmails } from './autoTicketProcessor.js';
+import { runAutoTicketProcessor } from './autoTicketProcessor.js';
 
 const app = express();
 app.use(bodyParser.json());
@@ -61,11 +61,8 @@ app.listen(PORT, () => {
   console.log(`Backend running on port ${PORT}`);
 
   // Background processor (every 60s)
-  setInterval(async () => {
-    try {
-      await processRawEmails();
-    } catch (err) {
-      console.error('Auto ticket processor failed:', err);
-    }
-  }, 60 * 1000);
+  setInterval(() => {
+  runAutoTicketProcessor().catch(console.error);
+}, 60 * 1000);
+
 });
