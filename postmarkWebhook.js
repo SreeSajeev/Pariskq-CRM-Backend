@@ -3,6 +3,11 @@ dotenv.config();
 import express from 'express';
 import bodyParser from 'body-parser';
 import { createClient } from '@supabase/supabase-js';
+import { processRawEmails } from './autoTicketProcessor.js';
+
+setInterval(() => {
+  processRawEmails();
+}, 60 * 1000); // every 1 minute
 
 
 const app = express();
