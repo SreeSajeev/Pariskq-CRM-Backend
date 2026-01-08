@@ -9,26 +9,37 @@ const supabase = createClient(
 );
 
 /* ------------------------
+   TICKET NUMBER GENERATOR
+------------------------- */
+function generateTicketNumber() {
+  const date = new Date();
+  const ymd = date.toISOString().slice(0, 10).replace(/-/g, '');
+  const random = Math.floor(1000 + Math.random() * 9000);
+  return `PKQ-${ymd}-${random}`;
+}
+
+/* ------------------------
    SIMPLE RULE-BASED PARSER
 ------------------------- */
 function parseEmail(rawEmail) {
-  const bodyText =
-    rawEmail.subject + ' ' + (rawEmail.payload?.TextBody || '');
+  const text =
+    `${rawEmail.subject || ''} ${rawEmail.payload?.TextBody || ''}`;
 
   const vehicleMatch =
-    bodyText.match(/[A-Z]{2}\s?\d{2}\s?[A-Z]{2}\s?\d{4}/);
+    text.match(/[A-Z]{2}\s?\d{2}\s?[A-Z]{2}\s?\d{4}/);
 
   const complaintMatch =
-    bodyText.match(/CMP-\d+/);
+    text.match(/CCM\d+|CMP-\d+/);
 
   return {
     vehicle_number: vehicleMatch?.[0] || null,
     complaint_id: complaintMatch?.[0] || null,
-    category: bodyText.toUpperCase().includes('MDVR') ? 'MDVR' : 'UNKNOWN',
-    issue_type: bodyText.toLowerCase().includes('offline')
+    category: text.toUpperCase().includes('MDVR') ? 'MDVR' : 'UNKNOWN',
+    issue_type: text.toLowerCase().includes('offline')
       ? 'DEVICE_OFFLINE'
       : 'GENERAL',
     location: rawEmail.payload?.FromFull?.Name || null,
+    opened_by_email: rawEmail.from_email || null,
     remarks: rawEmail.payload?.TextBody || rawEmail.subject
   };
 }
@@ -60,17 +71,21 @@ export async function processRawEmails() {
     console.log(`Processing raw_email ${email.id}`);
 
     const parsed = parseEmail(email);
+    const ticketNumber = generateTicketNumber();
 
     const { error: ticketError } = await supabase
       .from('tickets')
       .insert({
-        raw_email_id: email.id,
+        ticket_number: ticketNumber,          // REQUIRED
+        status: 'OPEN',                       // REQUIRED
+        complaint_id: parsed.complaint_id,
         vehicle_number: parsed.vehicle_number,
         category: parsed.category,
         issue_type: parsed.issue_type,
         location: parsed.location,
-        remarks: parsed.remarks,
-        status: 'OPEN'
+        opened_by_email: parsed.opened_by_email,
+        opened_at: new Date().toISOString(),
+        raw_email_id: email.id                // FK (you added this)
       });
 
     if (ticketError) {
@@ -83,9 +98,15 @@ export async function processRawEmails() {
 
     await supabase
       .from('raw_emails')
-      .update({ ticket_created: true })
+      .update({
+        ticket_created: true,
+        processing_status: 'TICKET_CREATED',
+        processed_at: new Date().toISOString()
+      })
       .eq('id', email.id);
 
-    console.log(`Ticket created for raw_email ${email.id}`);
+    console.log(
+      `Ticket ${ticketNumber} created for raw_email ${email.id}`
+    );
   }
 }
