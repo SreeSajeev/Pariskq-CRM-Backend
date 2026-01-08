@@ -1,0 +1,19 @@
+{
+  "type": "module",
+  "name": "pariskq-crm-backend",
+  "version": "1.0.0",
+  "main": "postmarkWebhook.js",
+  "scripts": {
+    "start": "node postmarkWebhook.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.89.0",
+    "body-parser": "^2.2.2",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1"
+  }
+}
