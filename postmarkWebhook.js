@@ -55,14 +55,14 @@ app.post('/postmark-webhook', async (req, res) => {
 /* ------------------------
    SERVER START + WORKER
 ------------------------- */
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT;
 
 app.listen(PORT, () => {
   console.log(`Backend running on port ${PORT}`);
 
   // Background processor (every 60s)
   setInterval(() => {
-  runAutoTicketProcessor().catch(console.error);
-}, 60 * 1000);
-
+    console.log('⏱ Auto ticket processor tick');
+    runAutoTicketProcessor().catch(console.error);
+  }, 60 * 1000);
 });

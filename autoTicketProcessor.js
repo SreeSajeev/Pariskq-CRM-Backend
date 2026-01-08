@@ -20,7 +20,6 @@ function generateTicketNumber() {
 
 function parseEmail(raw) {
   const text = `${raw.subject || ''}\n${raw.payload?.TextBody || ''}`;
-
   const extract = (regex) => text.match(regex)?.[1]?.trim() || null;
 
   return {
@@ -65,18 +64,20 @@ async function findDuplicate(parsed) {
 }
 
 /* =====================================================
-   PHASE 1 — RAW → PARSED
+   PHASE 1 — RAW_EMAILS → PARSED_EMAILS
 ===================================================== */
 
 async function parseRawEmails() {
-  const { data: emails } = await supabase
+  const { data: rawEmails } = await supabase
     .from('raw_emails')
     .select('*')
     .eq('ticket_created', false)
     .is('processing_status', null)
     .limit(10);
 
-  for (const email of emails || []) {
+  if (!rawEmails?.length) return;
+
+  for (const email of rawEmails) {
     const parsed = parseEmail(email);
     const confidence = calculateConfidence(parsed);
 
@@ -90,7 +91,8 @@ async function parseRawEmails() {
       reported_at: parsed.reported_at,
       remarks: parsed.remarks,
       confidence_score: confidence.score,
-      needs_review: confidence.needs_review
+      needs_review: confidence.needs_review,
+      ticket_created: false
     });
 
     await supabase
@@ -103,16 +105,19 @@ async function parseRawEmails() {
 }
 
 /* =====================================================
-   PHASE 2 — PARSED → TICKET
+   PHASE 2 — PARSED_EMAILS → TICKETS
 ===================================================== */
 
-async function createTickets() {
+async function createTicketsFromParsedEmails() {
   const { data: parsedRows } = await supabase
     .from('parsed_emails')
     .select('*, raw_emails(*)')
+    .eq('ticket_created', false)
     .limit(10);
 
-  for (const parsed of parsedRows || []) {
+  if (!parsedRows?.length) return;
+
+  for (const parsed of parsedRows) {
     const duplicate = await findDuplicate(parsed);
 
     if (duplicate) {
@@ -125,6 +130,12 @@ async function createTickets() {
         })
         .eq('id', parsed.raw_email_id);
 
+      await supabase
+        .from('parsed_emails')
+        .update({ ticket_created: true })
+        .eq('id', parsed.id);
+
+      console.log(`Duplicate detected for raw_email ${parsed.raw_email_id}`);
       continue;
     }
 
@@ -154,6 +165,11 @@ async function createTickets() {
     });
 
     await supabase
+      .from('parsed_emails')
+      .update({ ticket_created: true })
+      .eq('id', parsed.id);
+
+    await supabase
       .from('raw_emails')
       .update({
         ticket_created: true,
@@ -166,10 +182,11 @@ async function createTickets() {
 }
 
 /* =====================================================
-   RUNNER (THIS IS THE ONLY THING THAT LOOPS)
+   RUNNER
 ===================================================== */
 
 export async function runAutoTicketProcessor() {
+  console.log('🚀 Auto ticket processor running');
   await parseRawEmails();
-  await createTickets();
+  await createTicketsFromParsedEmails();
 }
