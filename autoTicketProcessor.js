@@ -30,20 +30,18 @@ function parseEmail(raw) {
   const extract = (regex) => text.match(regex)?.[1]?.trim() || null;
 
   return {
-    complaint_id: extract(/Record ID\s*(\w+)/i),
+    complaint_id: extract(/(CCM\w+)/i),
     vehicle_number: extract(/VEHICLE\s*([A-Z0-9]+)/i),
     category: extract(/Category\s*(.+)/i) || 'UNKNOWN',
     issue_type: extract(/Item Name\s*(.+)/i) || 'GENERAL',
     location: extract(/Location\s*(.+)/i),
     remarks: extract(/Remarks\s*(.+)/i),
-    reported_at: extract(/Submit Date\s*(.+)/i),
     normalized_subject: normalizeSubject(raw.subject),
   };
 }
 
 function calculateConfidence(parsed) {
   let score = 0;
-
   if (parsed.complaint_id) score += 40;
   if (parsed.vehicle_number) score += 30;
   if (parsed.category !== 'UNKNOWN') score += 15;
@@ -64,7 +62,8 @@ async function parseRawEmails() {
     .from('raw_emails')
     .select('*')
     .eq('ticket_created', false)
-    .is('processing_status', null)
+    .or('processing_status.is.null,processing_status.eq.PENDING')
+    .order('created_at', { ascending: true })
     .limit(10);
 
   if (!rawEmails?.length) return;
@@ -80,12 +79,10 @@ async function parseRawEmails() {
       category: parsed.category,
       issue_type: parsed.issue_type,
       location: parsed.location,
-      reported_at: parsed.reported_at,
       remarks: parsed.remarks,
       confidence_score: confidence.score,
       needs_review: confidence.needs_review,
       normalized_subject: parsed.normalized_subject,
-      ticket_created: false,
     });
 
     await supabase
@@ -93,29 +90,30 @@ async function parseRawEmails() {
       .update({ processing_status: 'PARSED' })
       .eq('id', email.id);
 
-    console.log(`Parsed raw_email ${email.id}`);
+    console.log(`✅ Parsed raw_email ${email.id}`);
   }
 }
 
 /* =====================================================
-   PHASE 2 — PARSED → TICKET OR COMMENT
+   PHASE 2 — PARSED → TICKET / COMMENT / DRAFT
 ===================================================== */
 
 async function processParsedEmails() {
   const { data: parsedRows } = await supabase
     .from('parsed_emails')
     .select('*, raw_emails(*)')
-    .eq('ticket_created', false)
+    .is('ticket_created', null)
+    .order('created_at', { ascending: true })
     .limit(10);
 
   if (!parsedRows?.length) return;
 
   for (const parsed of parsedRows) {
-    //  LOW CONFIDENCE → STOP
+    /* LOW CONFIDENCE → DRAFT ONLY */
     if (parsed.confidence_score < 80) {
       await supabase
         .from('parsed_emails')
-        .update({ ticket_created: true })
+        .update({ processing_status: 'DRAFT' })
         .eq('id', parsed.id);
 
       await supabase
@@ -123,11 +121,11 @@ async function processParsedEmails() {
         .update({ processing_status: 'DRAFT' })
         .eq('id', parsed.raw_email_id);
 
-      console.log(`Draft created for raw_email ${parsed.raw_email_id}`);
+      console.log(`📝 Draft created for raw_email ${parsed.raw_email_id}`);
       continue;
     }
 
-    // CHECK EXISTING TICKET (complaint_id)
+    /* CHECK EXISTING TICKET BY COMPLAINT */
     let existingTicket = null;
 
     if (parsed.complaint_id) {
@@ -140,7 +138,7 @@ async function processParsedEmails() {
       existingTicket = data?.[0] || null;
     }
 
-    // DUPLICATE → COMMENT
+    /* DUPLICATE → COMMENT */
     if (existingTicket) {
       await supabase.from('ticket_comments').insert({
         ticket_id: existingTicket.id,
@@ -162,31 +160,50 @@ async function processParsedEmails() {
         })
         .eq('id', parsed.raw_email_id);
 
-      console.log(`💬 Comment added to existing ticket`);
+      console.log(`💬 Comment added to ticket ${existingTicket.id}`);
       continue;
     }
 
-    // CREATE NEW TICKET
-    const status =
-      parsed.confidence_score >= 95 ? 'OPEN' : 'NEEDS_REVIEW';
-
+    /* CREATE NEW TICKET (DB-SAFE) */
     const ticketNumber = generateTicketNumber();
+    const status = parsed.confidence_score >= 95 ? 'OPEN' : 'NEEDS_REVIEW';
 
-    await supabase.from('tickets').insert({
-      ticket_number: ticketNumber,
-      status,
-      complaint_id: parsed.complaint_id,
-      vehicle_number: parsed.vehicle_number,
-      category: parsed.category,
-      issue_type: parsed.issue_type,
-      location: parsed.location,
-      opened_by_email: parsed.raw_emails.from_email,
-      opened_at: new Date().toISOString(),
-      raw_email_id: parsed.raw_email_id,
-      confidence_score: parsed.confidence_score,
-      needs_review: parsed.needs_review,
-      source: 'EMAIL',
-    });
+    try {
+      await supabase.from('tickets').insert({
+        ticket_number: ticketNumber,
+        status,
+        complaint_id: parsed.complaint_id,
+        vehicle_number: parsed.vehicle_number,
+        category: parsed.category,
+        issue_type: parsed.issue_type,
+        location: parsed.location,
+        opened_by_email: parsed.raw_emails.from_email,
+        opened_at: new Date().toISOString(),
+        raw_email_id: parsed.raw_email_id,
+        confidence_score: parsed.confidence_score,
+        needs_review: parsed.needs_review,
+        source: 'EMAIL',
+      });
+
+      console.log(`🎫 Ticket ${ticketNumber} created`);
+    } catch (err) {
+      // UNIQUE constraint hit → convert to comment
+      const { data } = await supabase
+        .from('tickets')
+        .select('id')
+        .eq('complaint_id', parsed.complaint_id)
+        .limit(1);
+
+      if (data?.[0]) {
+        await supabase.from('ticket_comments').insert({
+          ticket_id: data[0].id,
+          comment: parsed.remarks,
+          source: 'EMAIL',
+        });
+
+        console.log(`⚠️ Duplicate caught → comment added`);
+      }
+    }
 
     await supabase
       .from('parsed_emails')
@@ -200,8 +217,6 @@ async function processParsedEmails() {
         processing_status: status,
       })
       .eq('id', parsed.raw_email_id);
-
-    console.log(` Ticket ${ticketNumber} created`);
   }
 }
 
@@ -210,7 +225,7 @@ async function processParsedEmails() {
 ===================================================== */
 
 export async function runAutoTicketProcessor() {
-  console.log(' Auto ticket processor running');
+  console.log('🚀 Auto ticket processor running');
   await parseRawEmails();
   await processParsedEmails();
 }
