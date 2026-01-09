@@ -25,32 +25,49 @@ function normalizeSubject(subject = '') {
     .trim();
 }
 
+/* ---------- SAFE PAYLOAD PARSE ---------- */
+function getEmailText(raw) {
+  let payload = raw.payload;
+
+  if (typeof payload === 'string') {
+    try {
+      payload = JSON.parse(payload);
+    } catch {
+      payload = {};
+    }
+  }
+
+  return `
+${raw.subject || ''}
+${payload.TextBody || ''}
+${payload.HtmlBody || ''}
+`;
+}
+
+/* ---------- PARSER ---------- */
 function parseEmail(raw) {
-  const text = `${raw.subject || ''}\n${raw.payload?.TextBody || ''}`;
+  const text = getEmailText(raw);
   const extract = (regex) => text.match(regex)?.[1]?.trim() || null;
 
   return {
-    complaint_id: extract(/(CCM\w+)/i),
-    vehicle_number: extract(/VEHICLE\s*([A-Z0-9]+)/i),
-    category: extract(/Category\s*(.+)/i) || 'UNKNOWN',
-    issue_type: extract(/Item Name\s*(.+)/i) || 'GENERAL',
-    location: extract(/Location\s*(.+)/i),
-    remarks: extract(/Remarks\s*(.+)/i),
+    complaint_id: extract(/\b(CCM\w+)\b/i),
+    vehicle_number: extract(/\bVEHICLE\s*([A-Z0-9]+)\b/i),
+    category: extract(/Category\s*[:\-]?\s*(.+)/i) || 'UNKNOWN',
+    issue_type: extract(/Item Name\s*[:\-]?\s*(.+)/i) || 'GENERAL',
+    location: extract(/Location\s*[:\-]?\s*(.+)/i),
+    remarks: extract(/Remarks\s*[:\-]?\s*(.+)/i),
     normalized_subject: normalizeSubject(raw.subject),
   };
 }
 
-function calculateConfidence(parsed) {
+function calculateConfidence(p) {
   let score = 0;
-  if (parsed.complaint_id) score += 40;
-  if (parsed.vehicle_number) score += 30;
-  if (parsed.category !== 'UNKNOWN') score += 15;
-  if (parsed.issue_type !== 'GENERAL') score += 15;
+  if (p.complaint_id) score += 40;
+  if (p.vehicle_number) score += 30;
+  if (p.category !== 'UNKNOWN') score += 15;
+  if (p.issue_type !== 'GENERAL') score += 15;
 
-  return {
-    score,
-    needs_review: score < 95,
-  };
+  return score;
 }
 
 /* =====================================================
@@ -63,14 +80,12 @@ async function parseRawEmails() {
     .select('*')
     .eq('ticket_created', false)
     .or('processing_status.is.null,processing_status.eq.PENDING')
-    .order('created_at', { ascending: true })
+    .order('created_at')
     .limit(10);
 
-  if (!rawEmails?.length) return;
-
-  for (const email of rawEmails) {
+  for (const email of rawEmails || []) {
     const parsed = parseEmail(email);
-    const confidence = calculateConfidence(parsed);
+    const score = calculateConfidence(parsed);
 
     await supabase.from('parsed_emails').insert({
       raw_email_id: email.id,
@@ -80,9 +95,10 @@ async function parseRawEmails() {
       issue_type: parsed.issue_type,
       location: parsed.location,
       remarks: parsed.remarks,
-      confidence_score: confidence.score,
-      needs_review: confidence.needs_review,
+      confidence_score: score,
+      needs_review: score < 95,
       normalized_subject: parsed.normalized_subject,
+      ticket_created: false,
     });
 
     await supabase
@@ -102,92 +118,24 @@ async function processParsedEmails() {
   const { data: parsedRows } = await supabase
     .from('parsed_emails')
     .select('*, raw_emails(*)')
-    .is('ticket_created', null)
-    .order('created_at', { ascending: true })
+    .eq('ticket_created', false)
+    .order('created_at')
     .limit(10);
 
-  if (!parsedRows?.length) return;
-
-  for (const parsed of parsedRows) {
-    /* LOW CONFIDENCE → DRAFT ONLY */
+  for (const parsed of parsedRows || []) {
+    /* -------- LOW CONFIDENCE → DRAFT -------- */
     if (parsed.confidence_score < 80) {
       await supabase
-        .from('parsed_emails')
-        .update({ processing_status: 'DRAFT' })
-        .eq('id', parsed.id);
-
-      await supabase
         .from('raw_emails')
         .update({ processing_status: 'DRAFT' })
         .eq('id', parsed.raw_email_id);
 
-      console.log(`📝 Draft created for raw_email ${parsed.raw_email_id}`);
+      console.log(`📝 Draft queued for review (${parsed.raw_email_id})`);
       continue;
     }
 
-    /* CHECK EXISTING TICKET BY COMPLAINT */
-    let existingTicket = null;
-
+    /* -------- ABSOLUTE DEDUP (complaint_id) -------- */
     if (parsed.complaint_id) {
-      const { data } = await supabase
-        .from('tickets')
-        .select('id')
-        .eq('complaint_id', parsed.complaint_id)
-        .limit(1);
-
-      existingTicket = data?.[0] || null;
-    }
-
-    /* DUPLICATE → COMMENT */
-    if (existingTicket) {
-      await supabase.from('ticket_comments').insert({
-        ticket_id: existingTicket.id,
-        comment: parsed.remarks || parsed.raw_emails.subject,
-        source: 'EMAIL',
-      });
-
-      await supabase
-        .from('parsed_emails')
-        .update({ ticket_created: true })
-        .eq('id', parsed.id);
-
-      await supabase
-        .from('raw_emails')
-        .update({
-          ticket_created: true,
-          processing_status: 'COMMENT_ADDED',
-          linked_ticket_id: existingTicket.id,
-        })
-        .eq('id', parsed.raw_email_id);
-
-      console.log(`💬 Comment added to ticket ${existingTicket.id}`);
-      continue;
-    }
-
-    /* CREATE NEW TICKET (DB-SAFE) */
-    const ticketNumber = generateTicketNumber();
-    const status = parsed.confidence_score >= 95 ? 'OPEN' : 'NEEDS_REVIEW';
-
-    try {
-      await supabase.from('tickets').insert({
-        ticket_number: ticketNumber,
-        status,
-        complaint_id: parsed.complaint_id,
-        vehicle_number: parsed.vehicle_number,
-        category: parsed.category,
-        issue_type: parsed.issue_type,
-        location: parsed.location,
-        opened_by_email: parsed.raw_emails.from_email,
-        opened_at: new Date().toISOString(),
-        raw_email_id: parsed.raw_email_id,
-        confidence_score: parsed.confidence_score,
-        needs_review: parsed.needs_review,
-        source: 'EMAIL',
-      });
-
-      console.log(`🎫 Ticket ${ticketNumber} created`);
-    } catch (err) {
-      // UNIQUE constraint hit → convert to comment
       const { data } = await supabase
         .from('tickets')
         .select('id')
@@ -197,13 +145,48 @@ async function processParsedEmails() {
       if (data?.[0]) {
         await supabase.from('ticket_comments').insert({
           ticket_id: data[0].id,
-          comment: parsed.remarks,
+          comment: parsed.remarks || parsed.raw_emails.subject,
           source: 'EMAIL',
         });
 
-        console.log(`⚠️ Duplicate caught → comment added`);
+        await supabase
+          .from('parsed_emails')
+          .update({ ticket_created: true })
+          .eq('id', parsed.id);
+
+        await supabase
+          .from('raw_emails')
+          .update({
+            ticket_created: true,
+            processing_status: 'COMMENT_ADDED',
+            linked_ticket_id: data[0].id,
+          })
+          .eq('id', parsed.raw_email_id);
+
+        console.log(`💬 Duplicate → comment added`);
+        continue;
       }
     }
+
+    /* -------- CREATE TICKET -------- */
+    const ticketNumber = generateTicketNumber();
+    const status = parsed.confidence_score >= 95 ? 'OPEN' : 'NEEDS_REVIEW';
+
+    await supabase.from('tickets').insert({
+      ticket_number: ticketNumber,
+      status,
+      complaint_id: parsed.complaint_id,
+      vehicle_number: parsed.vehicle_number,
+      category: parsed.category,
+      issue_type: parsed.issue_type,
+      location: parsed.location,
+      opened_by_email: parsed.raw_emails.from_email,
+      opened_at: new Date().toISOString(),
+      raw_email_id: parsed.raw_email_id,
+      confidence_score: parsed.confidence_score,
+      needs_review: parsed.needs_review,
+      source: 'EMAIL',
+    });
 
     await supabase
       .from('parsed_emails')
@@ -217,6 +200,8 @@ async function processParsedEmails() {
         processing_status: status,
       })
       .eq('id', parsed.raw_email_id);
+
+    console.log(`🎫 Ticket ${ticketNumber} created`);
   }
 }
 
