@@ -14,3 +14,22 @@ export async function markParsedAsTicketed(id) {
     .update({ ticket_created: true })
     .eq('id', id);
 }
+
+/**
+ * 🔹 REQUIRED by autoTicketWorker
+ */
+export async function fetchUnprocessedParsedEmails(limit = 10) {
+  const { data, error } = await supabase
+    .from('parsed_emails')
+    .select('*, raw_emails(*)')
+    .eq('ticket_created', false)
+    .order('created_at')
+    .limit(limit);
+
+  if (error) {
+    console.error('❌ fetchUnprocessedParsedEmails error:', error);
+    return [];
+  }
+
+  return data || [];
+}
