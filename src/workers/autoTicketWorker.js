@@ -50,7 +50,6 @@ export async function runAutoTicketWorker() {
   }
 }
 */
-
 import {
   fetchPendingRawEmails,
   updateRawEmailStatus,
@@ -68,12 +67,19 @@ import { addEmailComment } from '../services/commentService.js';
 import { createTicket } from '../services/ticketService.js';
 
 export async function runAutoTicketWorker() {
-  const { data: rawEmails } = await fetchPendingRawEmails();
+  const { data: rawEmails, error } = await fetchPendingRawEmails();
+
+  if (error) {
+    console.error('Failed to fetch pending raw emails:', error);
+    return;
+  }
 
   for (const raw of rawEmails || []) {
     try {
+      console.log(`🔍 Processing raw_email ${raw.id}`);
+
       /* ===============================
-         STEP 1 — PARSE
+         STEP 1 — PARSE EMAIL
       =============================== */
       const parsed = parseEmail(raw);
 
@@ -84,12 +90,15 @@ export async function runAutoTicketWorker() {
         continue;
       }
 
+      /* ===============================
+         STEP 2 — CONFIDENCE SCORE
+      =============================== */
       const confidence = calculateConfidence(parsed);
 
       /* ===============================
-         STEP 2 — STORE PARSED
+         STEP 3 — STORE PARSED EMAIL
       =============================== */
-      const { data: parsedRow, error: parseInsertError } =
+      const { data: parsedRow, error: parsedError } =
         await insertParsedEmail({
           raw_email_id: raw.id,
           ...parsed,
@@ -98,15 +107,15 @@ export async function runAutoTicketWorker() {
           ticket_created: false,
         });
 
-      if (parseInsertError || !parsedRow) {
+      if (parsedError || !parsedRow) {
         await updateRawEmailStatus(raw.id, 'ERROR', {
-          processing_error: 'Failed to insert parsed email',
+          processing_error: 'Parsed email insert failed',
         });
         continue;
       }
 
       /* ===============================
-         STEP 3 — LOW CONFIDENCE → DRAFT
+         STEP 4 — LOW CONFIDENCE → DRAFT
       =============================== */
       if (confidence < 80) {
         await updateRawEmailStatus(raw.id, 'DRAFT');
@@ -114,7 +123,7 @@ export async function runAutoTicketWorker() {
       }
 
       /* ===============================
-         STEP 4 — DEDUP
+         STEP 5 — DEDUPLICATION
       =============================== */
       if (parsed.complaint_id) {
         const duplicate = await findTicketByComplaintId(
@@ -137,18 +146,21 @@ export async function runAutoTicketWorker() {
       }
 
       /* ===============================
-         STEP 5 — CREATE TICKET
+         STEP 6 — CREATE TICKET
       =============================== */
       await createTicket(parsedRow, raw);
 
       await updateRawEmailStatus(raw.id, 'TICKET_CREATED');
       await markParsedAsTicketed(parsedRow.id);
 
+      console.log(`🎫 Ticket created for raw_email ${raw.id}`);
+
     } catch (err) {
+      console.error(`❌ Worker failed for raw_email ${raw.id}`, err);
+
       await updateRawEmailStatus(raw.id, 'ERROR', {
         processing_error: err.message,
       });
-      console.error('AutoTicketWorker error:', err);
     }
   }
 }
