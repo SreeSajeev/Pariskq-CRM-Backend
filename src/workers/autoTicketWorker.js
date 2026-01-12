@@ -251,6 +251,10 @@ export async function runAutoTicketWorker() {
             missing_fields: validation.missingFields,
           });
 
+          console.info(
+            `⏸ raw_email ${raw.id} set to AWAITING_CUSTOMER_INFO; missing: ${validation.missingFields.join(', ')}`
+          );
+
           // Compose and (optionally) send clarification email. Function is safe to retry.
           try {
             await Promise.resolve(
@@ -339,6 +343,9 @@ export async function runAutoTicketWorker() {
       await markParsedAsTicketed(parsedRow.id);
 
       console.log(`🎫 Ticket created for raw_email ${raw.id}`);
+      console.info(
+        `✅ raw_email ${raw.id} processed and ticket created; required fields present — pipeline resumed.`
+      );
     } catch (err) {
       console.error(`❌ Worker failed for raw_email ${raw.id}`, err);
 
