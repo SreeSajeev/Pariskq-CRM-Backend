@@ -183,6 +183,8 @@ import { calculateConfidence } from '../services/confidenceService.js';
 import { addEmailComment } from '../services/commentService.js';
 import { createTicket } from '../services/ticketService.js';
 import { classifyEmail } from '../services/emailClassificationService.js';
+import { validateRequiredFields } from '../services/requiredFieldValidator.js';
+import { sendMissingInfoEmail } from '../services/customerClarificationService.js';
 
 export async function runAutoTicketWorker() {
   const { data: rawEmails, error } = await fetchPendingRawEmails();
@@ -233,6 +235,42 @@ export async function runAutoTicketWorker() {
       if (!parsed) {
         await updateRawEmailStatus(raw.id, 'DRAFT', {
           processing_error: 'Parser returned null',
+        });
+        continue;
+      }
+
+      /* ===============================
+         STEP 1b — REQUIRED FIELDS VALIDATION
+         If required fields missing, pause pipeline and ask customer.
+      =============================== */
+      try {
+        const validation = validateRequiredFields(parsed);
+        if (!validation.isComplete) {
+          // Persist awaiting-customer state and record missing fields
+          await updateRawEmailStatus(raw.id, 'AWAITING_CUSTOMER_INFO', {
+            missing_fields: validation.missingFields,
+          });
+
+          // Compose and (optionally) send clarification email. Function is safe to retry.
+          try {
+            await Promise.resolve(
+              sendMissingInfoEmail({
+                to: raw.from_email || raw.from || null,
+                originalSubject: raw.subject || '',
+                missingFields: validation.missingFields,
+              })
+            );
+          } catch (e) {
+            // Ensure worker does not crash if mailer fails — we already updated DB state.
+          }
+
+          // Stop automatic processing for this email — human/customer must reply
+          continue;
+        }
+      } catch (e) {
+        // Defensive: if validator had an unexpected failure, record and continue pipeline.
+        await updateRawEmailStatus(raw.id, 'ERROR', {
+          processing_error: 'Required fields validation failed',
         });
         continue;
       }
