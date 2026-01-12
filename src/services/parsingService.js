@@ -1,10 +1,17 @@
 import { getEmailText } from '../utils/emailParser.js';
-import { normalizeSubject } from '../utils/subjectNormalizer.js';
 
+/**
+ * Safely parses a raw email into a normalized structure.
+ * This function:
+ * - NEVER throws
+ * - NEVER returns null
+ * - ALWAYS returns the same object shape
+ * - Documents failures via parse_errors instead of crashing
+ */
 export function parseEmail(raw) {
   const parse_errors = [];
 
-  // Safe defaults — NEVER return undefined or throw
+  // --- Fixed return contract ---
   const result = {
     complaint_id: null,
     vehicle_number: null,
@@ -17,64 +24,100 @@ export function parseEmail(raw) {
     parse_errors,
   };
 
+  // --- Step 1: Extract readable text safely ---
+  let text = '';
+
   try {
-    const text = getEmailText(raw);
-
-    if (!text || typeof text !== 'string') {
-      parse_errors.push('Email body could not be extracted or was empty');
-      return result;
+    const extracted = getEmailText(raw);
+    if (typeof extracted === 'string' && extracted.trim().length > 0) {
+      text = extracted;
+    } else {
+      parse_errors.push('Email body was empty or unreadable');
     }
-
-    const safeExtract = (regex, fieldName) => {
-      try {
-        const match = text.match(regex);
-        if (!match || !match[1]) {
-          return null;
-        }
-        return match[1].trim();
-      } catch (err) {
-        parse_errors.push(`Failed to extract ${fieldName}`);
-        return null;
-      }
-    };
-
-    // === Existing extraction logic (unchanged in intent) ===
-
-    result.complaint_id = safeExtract(/\b(CCM\w+)\b/i, 'complaint_id');
-
-    result.vehicle_number = safeExtract(
-      /\bVEHICLE\s*([A-Z0-9]+)\b/i,
-      'vehicle_number'
-    );
-
-    result.category =
-      safeExtract(/Category\s*[:\-]?\s*(.+)/i, 'category') || 'UNKNOWN';
-
-    result.issue_type =
-      safeExtract(/Item Name\s*[:\-]?\s*(.+)/i, 'issue_type') || 'GENERAL';
-
-    result.location = safeExtract(
-      /Location\s*[:\-]?\s*(.+)/i,
-      'location'
-    );
-
-    result.remarks = safeExtract(
-      /Remarks\s*[:\-]?\s*(.+)/i,
-      'remarks'
-    );
-
-    // Optional / metadata-safe fields
-    try {
-      result.normalized_subject = normalizeSubject(raw?.subject || '');
-    } catch (err) {
-      parse_errors.push('Failed to normalize subject');
-    }
-
-  } catch (err) {
-    // Absolute safety net — parseEmail must NEVER throw
-    parse_errors.push('Unexpected parsing failure');
+  } catch {
+    parse_errors.push('Failed to extract email body');
   }
+
+  // --- Helper: regex extraction that never throws ---
+  const extract = (label, regex) => {
+    if (!text) return null;
+
+    try {
+      const match = text.match(regex);
+      if (!match || !match[1]) return null;
+      return String(match[1]).trim();
+    } catch {
+      parse_errors.push(`Failed while extracting ${label}`);
+      return null;
+    }
+  };
+
+  // --- Step 2: Field extraction (preserving original intent) ---
+
+  const complaint_id = extract('complaint_id', /\b(CCM\w+)\b/i);
+  if (complaint_id) {
+    result.complaint_id = complaint_id;
+  }
+
+  const vehicle_number = extract(
+    'vehicle_number',
+    /\bVEHICLE\s*([A-Z0-9]+)\b/i
+  );
+  if (vehicle_number) {
+    result.vehicle_number = vehicle_number;
+  }
+
+  const category = extract(
+    'category',
+    /Category\s*[:\-]?\s*(.+)/i
+  );
+  if (category) {
+    result.category = category;
+  }
+
+  const issue_type = extract(
+    'issue_type',
+    /Item Name\s*[:\-]?\s*(.+)/i
+  );
+  if (issue_type) {
+    result.issue_type = issue_type;
+  }
+
+  const location = extract(
+    'location',
+    /Location\s*[:\-]?\s*(.+)/i
+  );
+  if (location) {
+    result.location = location;
+  }
+
+  const remarks = extract(
+    'remarks',
+    /Remarks\s*[:\-]?\s*(.+)/i
+  );
+  if (remarks) {
+    result.remarks = remarks;
+  }
+
+  const reported_at = extract(
+    'reported_at',
+    /Reported At\s*[:\-]?\s*(.+)/i
+  );
+  if (reported_at) {
+    result.reported_at = reported_at;
+  }
+
+  // --- Step 3: Record missing fields only if text existed ---
+  if (text) {
+    if (!result.complaint_id) parse_errors.push('complaint_id missing');
+    if (!result.vehicle_number) parse_errors.push('vehicle_number missing');
+    if (!result.issue_type) parse_errors.push('issue_type missing');
+    if (!result.category) parse_errors.push('category missing');
+    if (!result.location) parse_errors.push('location missing');
+  }
+
+  // Attachments intentionally left empty for now
+  // (Postmark attachment handling will populate this later)
 
   return result;
 }
-
