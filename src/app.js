@@ -6,6 +6,7 @@ import bodyParser from 'body-parser';
 
 import { supabase } from './supabaseClient.js';
 import { runAutoTicketWorker } from './workers/autoTicketWorker.js';
+import { sendEmail } from './services/postmarkMailer.js';
 
 const app = express();
 
@@ -65,6 +66,10 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`🚀 Backend running on port ${PORT}`);
+
+  // Wire global mail sender for services that call globalThis.sendEmail
+  // This is intentionally a single, unconditional assignment performed at startup.
+  globalThis.sendEmail = sendEmail;
 
   // Run worker every 60 seconds
   setInterval(async () => {
