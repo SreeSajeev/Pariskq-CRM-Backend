@@ -3,15 +3,27 @@ import { supabase } from '../supabaseClient.js';
 export async function findTicketByComplaintId(complaintId) {
   if (!complaintId) return null;
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('tickets')
     .select('id')
     .eq('complaint_id', complaintId)
-    .limit(1);
+    .limit(1)
+    .single();
 
-  return data?.[0] || null;
+  if (error) return null;
+  return data;
 }
 
-export async function insertTicket(data) {
-  return supabase.from('tickets').insert(data);
+export async function insertTicket(ticket) {
+  const { data, error } = await supabase
+    .from('tickets')
+    .insert(ticket)
+    .select()
+    .single();
+
+  if (error) {
+    throw new Error(`Ticket insert failed: ${error.message}`);
+  }
+
+  return data;
 }
