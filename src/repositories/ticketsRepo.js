@@ -1,5 +1,5 @@
 import { supabase } from '../supabaseClient.js';
-
+//working with tickets table
 export async function findTicketByComplaintId(complaintId) {
   if (!complaintId) return null;
 
