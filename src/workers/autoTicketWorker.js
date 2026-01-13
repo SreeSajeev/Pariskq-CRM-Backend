@@ -199,7 +199,7 @@ export async function runAutoTicketWorker() {
       console.log(`🔍 Processing raw_email ${raw.id}`);
 
       /* ===============================
-         STEP 0 — CLASSIFY EMAIL
+         STEP 0 — CLASSIFICATION GATE
       =============================== */
       const classification = classifyEmail(raw);
 
@@ -210,77 +210,56 @@ export async function runAutoTicketWorker() {
           UNKNOWN: 'IGNORED_UNKNOWN',
         };
 
-        const newStatus =
-          statusMap[classification.type] || 'IGNORED_UNKNOWN';
-
-        await updateRawEmailStatus(raw.id, newStatus, {
-          classification_type: classification.type,
-          classification_confidence: classification.confidence,
-          classification_reasons: classification.reasons,
-        });
+        await updateRawEmailStatus(
+          raw.id,
+          statusMap[classification.type] || 'IGNORED_UNKNOWN',
+          {
+            classification_type: classification.type,
+            classification_confidence: classification.confidence,
+            classification_reasons: classification.reasons,
+          }
+        );
 
         console.info(
           `🛑 raw_email ${raw.id} ignored (${classification.type})`,
           classification.reasons
         );
-
-        continue; // 🚨 STOP PIPELINE HERE
+        continue;
       }
 
       /* ===============================
-         STEP 1 — PARSE EMAIL
+         STEP 1 — PARSE (SAFE)
       =============================== */
       const parsed = parseEmail(raw);
 
-      if (!parsed) {
-        await updateRawEmailStatus(raw.id, 'DRAFT', {
-          processing_error: 'Parser returned null',
-        });
-        continue;
-      }
-
       /* ===============================
-         STEP 1b — REQUIRED FIELDS VALIDATION
-         If required fields missing, pause pipeline and ask customer.
+         STEP 1B — REQUIRED FIELD CHECK
       =============================== */
-      try {
-        const validation = validateRequiredFields(parsed);
-        if (!validation.isComplete) {
-          // Persist awaiting-customer state and record missing fields
-          await updateRawEmailStatus(raw.id, 'AWAITING_CUSTOMER_INFO', {
-            missing_fields: validation.missingFields,
-          });
+      const validation = validateRequiredFields(parsed);
 
-          console.info(
-            `⏸ raw_email ${raw.id} set to AWAITING_CUSTOMER_INFO; missing: ${validation.missingFields.join(', ')}`
-          );
-
-          // Compose and (optionally) send clarification email. Function is safe to retry.
-          try {
-            await Promise.resolve(
-              sendMissingInfoEmail({
-                to: raw.from_email || raw.from || null,
-                originalSubject: raw.subject || '',
-                missingFields: validation.missingFields,
-              })
-            );
-          } catch (e) {
-            // Ensure worker does not crash if mailer fails — we already updated DB state.
-          }
-
-          // Stop automatic processing for this email — human/customer must reply
-          continue;
-        }
-      } catch (e) {
-        // Defensive: if validator had an unexpected failure, record and continue pipeline.
-        await updateRawEmailStatus(raw.id, 'ERROR', {
-          processing_error: 'Required fields validation failed',
+      if (!validation.isComplete) {
+        await updateRawEmailStatus(raw.id, 'AWAITING_CUSTOMER_INFO', {
+          missing_fields: validation.missingFields,
         });
+
+        console.info(
+          `⏸ raw_email ${raw.id} awaiting customer info: ${validation.missingFields.join(', ')}`
+        );
+
+        // Safe clarification (never throws)
+        await Promise.resolve(
+          sendMissingInfoEmail({
+            to: raw.from_email || null,
+            originalSubject: raw.subject || '',
+            missingFields: validation.missingFields,
+          })
+        );
+
         continue;
       }
 
       /* ===============================
-         STEP 2 — CONFIDENCE SCORE
+         STEP 2 — CONFIDENCE
       =============================== */
       const confidence = calculateConfidence(parsed);
 
@@ -304,7 +283,7 @@ export async function runAutoTicketWorker() {
       }
 
       /* ===============================
-         STEP 4 — LOW CONFIDENCE → DRAFT
+         STEP 4 — LOW CONFIDENCE
       =============================== */
       if (confidence < 80) {
         await updateRawEmailStatus(raw.id, 'DRAFT');
@@ -315,18 +294,16 @@ export async function runAutoTicketWorker() {
          STEP 5 — DEDUPLICATION
       =============================== */
       if (parsed.complaint_id) {
-        const duplicate = await findTicketByComplaintId(
-          parsed.complaint_id
-        );
+        const existing = await findTicketByComplaintId(parsed.complaint_id);
 
-        if (duplicate) {
+        if (existing) {
           await addEmailComment(
-            duplicate.id,
+            existing.id,
             parsed.remarks || raw.subject
           );
 
           await updateRawEmailStatus(raw.id, 'COMMENT_ADDED', {
-            linked_ticket_id: duplicate.id,
+            linked_ticket_id: existing.id,
           });
 
           await markParsedAsTicketed(parsedRow.id);
@@ -335,17 +312,21 @@ export async function runAutoTicketWorker() {
       }
 
       /* ===============================
-         STEP 6 — CREATE TICKET
+         STEP 6 — CREATE TICKET ✅ FIXED
       =============================== */
-      await createTicket(parsedRow, raw);
+      await createTicket(
+        {
+          ...parsed,
+          confidence_score: confidence,
+          needs_review: confidence < 95,
+        },
+        raw
+      );
 
       await updateRawEmailStatus(raw.id, 'TICKET_CREATED');
       await markParsedAsTicketed(parsedRow.id);
 
       console.log(`🎫 Ticket created for raw_email ${raw.id}`);
-      console.info(
-        `✅ raw_email ${raw.id} processed and ticket created; required fields present — pipeline resumed.`
-      );
     } catch (err) {
       console.error(`❌ Worker failed for raw_email ${raw.id}`, err);
 
@@ -355,4 +336,3 @@ export async function runAutoTicketWorker() {
     }
   }
 }
-
