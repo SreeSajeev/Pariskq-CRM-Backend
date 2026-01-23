@@ -1,3 +1,8 @@
+/**
+ * app.js
+ * Entry point for Pariskq CRM Backend
+ */
+
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -10,24 +15,31 @@ import { runAutoTicketWorker } from './workers/autoTicketWorker.js';
 const app = express();
 
 /**
+ * --------------------
  * Middleware
+ * --------------------
  */
 app.use(bodyParser.json({ limit: '10mb' }));
 
 /**
- * Health check
- * Used by Render / monitoring / manual sanity checks
+ * --------------------
+ * Health Check
+ * --------------------
+ * Used by Render, monitoring tools, and manual checks
  */
 app.get('/health', (_req, res) => {
-  res.status(200).json({ status: 'ok' });
+  return res.status(200).json({ status: 'ok' });
 });
 
 /**
- * Postmark inbound webhook
+ * --------------------
+ * Postmark Inbound Webhook
+ * --------------------
  * Responsibility:
- * - Accept email
- * - Store it RAW
- * - Do NOT process here
+ * 1. Accept inbound email
+ * 2. Store it RAW
+ * 3. Mark as PENDING
+ * 4. Do NOT process here (async worker handles that)
  */
 app.post('/postmark-webhook', async (req, res) => {
   try {
@@ -38,41 +50,57 @@ app.post('/postmark-webhook', async (req, res) => {
       .insert({
         message_id: email.MessageID,
         thread_id: email.ThreadID || null,
-        from_email: email.FromFull?.Email || email.From,
-        to_email: email.ToFull?.Email || email.To,
+        from_email: email.FromFull?.Email || email.From || null,
+        to_email: email.ToFull?.Email || email.To || null,
         subject: email.Subject || null,
         received_at: email.ReceivedAt || new Date().toISOString(),
         payload: email,
         processing_status: 'PENDING',
+        created_at: new Date().toISOString()
       });
 
     if (error) {
-      console.error('[POSTMARK] raw_emails insert failed:', error);
+      console.error('[POSTMARK] Failed to store raw email:', error);
       return res.status(500).send('Failed to store email');
     }
 
-    return res.status(200).send('Email saved');
+    return res.status(200).send('Email received');
   } catch (err) {
-    console.error('[POSTMARK] webhook error:', err);
+    console.error('[POSTMARK] Webhook error:', err);
     return res.status(500).send('Internal server error');
   }
 });
 
 /**
- * Server boot + background worker
+ * --------------------
+ * Server Boot + Worker
+ * --------------------
  */
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 Backend running on port ${PORT}`);
 
-  // Run worker every 60 seconds
+  /**
+   * Run worker immediately on startup
+   * (Prevents emails staying PENDING during demos / restarts)
+   */
+  try {
+    console.log('⚡ Running auto ticket worker on startup');
+    await runAutoTicketWorker();
+  } catch (err) {
+    console.error('[WORKER] Startup run failed:', err);
+  }
+
+  /**
+   * Run worker periodically (every 60 seconds)
+   */
   setInterval(async () => {
     console.log('⏱ Auto ticket worker tick');
     try {
       await runAutoTicketWorker();
     } catch (err) {
-      console.error('[WORKER] fatal error:', err);
+      console.error('[WORKER] Interval run failed:', err);
     }
   }, 60_000);
 });

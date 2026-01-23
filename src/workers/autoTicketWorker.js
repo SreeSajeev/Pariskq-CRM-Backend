@@ -212,12 +212,7 @@ export async function runAutoTicketWorker() {
 
         await updateRawEmailStatus(
           raw.id,
-          statusMap[classification.type] || 'IGNORED_UNKNOWN',
-          {
-            classification_type: classification.type,
-            classification_confidence: classification.confidence,
-            classification_reasons: classification.reasons,
-          }
+          statusMap[classification.type] || 'IGNORED_UNKNOWN'
         );
 
         console.info(

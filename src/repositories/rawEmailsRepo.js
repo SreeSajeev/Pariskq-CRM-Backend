@@ -10,8 +10,14 @@ export async function fetchPendingRawEmails(limit = 10) {
 }
 
 export async function updateRawEmailStatus(id, status, extra = {}) {
-  return supabase
+  const { error } = await supabase
     .from('raw_emails')
     .update({ processing_status: status, ...extra })
     .eq('id', id);
+
+  if (error) {
+    console.error(`❌ Failed to update raw_email ${id} status to ${status}:`, error);
+  }
+
+  return { error };
 }
