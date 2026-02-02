@@ -10,8 +10,13 @@ export async function findTicketByComplaintId(complaintId) {
     .limit(1)
     .single();
 
-  if (error) return null;
-  return data;
+  if (error && error.code !== 'PGRST116') {
+  throw new Error(`ticketsRepo error: ${error.message}`);
+}
+
+  return data ?? null;
+
+  
 }
 
 export async function insertTicket(ticket) {

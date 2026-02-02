@@ -32,7 +32,10 @@ export async function createTicket(parsed, rawEmail) {
   }
 
   if (parsed.confidence_score == null) {
-    throw new Error('Parsed email missing confidence_score');
+    const err = new Error('Parsed email missing confidence_score');
+    err.code = 'CONFIDENCE_SCORE_MISSING';
+    throw err;
+
   }
 
   const ticketNumber = generateTicketNumber();
