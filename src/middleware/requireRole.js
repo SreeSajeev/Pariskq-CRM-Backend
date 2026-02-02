@@ -4,23 +4,19 @@ import { supabase } from '../supabaseClient.js';
  * Backend authentication middleware
  * Verifies Supabase JWT sent from frontend
  */
-export async function requireAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
+/**
+ * Role-based authorization middleware
+ */
+export function requireRole(allowedRoles = []) {
+  return (req, res, next) => {
+    const role = req.user?.user_metadata?.role;
 
-  if (!authHeader) {
-    return res.status(401).json({ error: 'Missing Authorization header' });
-  }
+    if (!role || !allowedRoles.includes(role)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+      });
+    }
 
-  const token = authHeader.replace('Bearer ', '');
-
-  const { data, error } = await supabase.auth.getUser(token);
-
-  if (error || !data?.user) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-
-  // Attach verified user to request
-  req.user = data.user;
-
-  next();
+    next();
+  };
 }
