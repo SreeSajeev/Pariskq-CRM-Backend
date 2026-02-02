@@ -11,6 +11,8 @@ import bodyParser from 'body-parser';
 
 import { supabase } from './supabaseClient.js';
 import { runAutoTicketWorker } from './workers/autoTicketWorker.js';
+import { requireAuth } from './middleware/auth.js';
+import { requireRole } from './middleware/requireRole.js';
 
 const app = express();
 
