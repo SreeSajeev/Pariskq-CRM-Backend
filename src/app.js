@@ -11,82 +11,89 @@ import bodyParser from 'body-parser';
 
 import { supabase } from './supabaseClient.js';
 import { runAutoTicketWorker } from './workers/autoTicketWorker.js';
-import { requireAuth } from './middleware/auth.js';
-import { requireRole } from './middleware/requireRole.js';
 
 const app = express();
 
-/**
- * --------------------
- * Middleware
- * --------------------
- */
+/* ===============================
+   GLOBAL MIDDLEWARE
+================================ */
+
+// Parse JSON payloads
 app.use(bodyParser.json({ limit: '10mb' }));
 
-/**
- * --------------------
- * Health Check
- * --------------------
- * Used by Render, monitoring tools, and manual checks
- */
+// IMPORTANT: Parse Postmark form-encoded payloads
+app.use(bodyParser.urlencoded({ extended: true }));
+
+/* ===============================
+   HEALTH CHECK
+================================ */
+
 app.get('/health', (_req, res) => {
-  return res.status(200).json({ status: 'ok' });
+  res.status(200).json({ status: 'ok' });
 });
 
-/**
- * --------------------
- * Postmark Inbound Webhook
- * --------------------
- * Responsibility:
- * 1. Accept inbound email
- * 2. Store it RAW
- * 3. Mark as PENDING
- * 4. Do NOT process here (async worker handles that)
- */
+/* ===============================
+   POSTMARK INBOUND WEBHOOK
+================================
+ Responsibilities:
+ - Accept inbound email
+ - Store RAW payload
+ - Mark as PENDING
+ - Never throw
+*/
 app.post('/postmark-webhook', async (req, res) => {
   try {
     const email = req.body;
 
+    // Defensive validation
+    if (!email || !email.MessageID) {
+      console.warn('[POSTMARK] Invalid payload received');
+      return res.status(400).send('Invalid payload');
+    }
+
+    const insertPayload = {
+      message_id: email.MessageID,
+      thread_id: email.ThreadID || null,
+      from_email: email.FromFull?.Email || email.From || null,
+      to_email: email.ToFull?.Email || email.To || null,
+      subject: email.Subject || null,
+      received_at: email.ReceivedAt || new Date().toISOString(),
+
+      // IMPORTANT: Ensure payload is DB-safe
+      payload: email, // ✅ assumes jsonb column
+
+      processing_status: 'PENDING',
+      created_at: new Date().toISOString(),
+    };
+
     const { error } = await supabase
       .from('raw_emails')
-      .insert({
-        message_id: email.MessageID,
-        thread_id: email.ThreadID || null,
-        from_email: email.FromFull?.Email || email.From || null,
-        to_email: email.ToFull?.Email || email.To || null,
-        subject: email.Subject || null,
-        received_at: email.ReceivedAt || new Date().toISOString(),
-        payload: email,
-        processing_status: 'PENDING',
-        created_at: new Date().toISOString()
-      });
+      .insert(insertPayload);
 
     if (error) {
-      console.error('[POSTMARK] Failed to store raw email:', error);
+      console.error(
+        '[POSTMARK] Supabase insert failed:',
+        JSON.stringify(error, null, 2)
+      );
       return res.status(500).send('Failed to store email');
     }
 
-    return res.status(200).send('Email received');
+    res.status(200).send('Email received');
   } catch (err) {
-    console.error('[POSTMARK] Webhook error:', err);
-    return res.status(500).send('Internal server error');
+    console.error('[POSTMARK] Webhook exception:', err);
+    res.status(500).send('Internal server error');
   }
 });
 
-/**
- * --------------------
- * Server Boot + Worker
- * --------------------
- */
+/* ===============================
+   SERVER BOOT + WORKER
+================================ */
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, async () => {
   console.log(`🚀 Backend running on port ${PORT}`);
 
-  /**
-   * Run worker immediately on startup
-   * (Prevents emails staying PENDING during demos / restarts)
-   */
   try {
     console.log('⚡ Running auto ticket worker on startup');
     await runAutoTicketWorker();
@@ -94,9 +101,6 @@ app.listen(PORT, async () => {
     console.error('[WORKER] Startup run failed:', err);
   }
 
-  /**
-   * Run worker periodically (every 60 seconds)
-   */
   setInterval(async () => {
     console.log('⏱ Auto ticket worker tick');
     try {
