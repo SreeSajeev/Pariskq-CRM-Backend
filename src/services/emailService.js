@@ -36,3 +36,42 @@ Pariskq Support Team
     throw new Error(`Postmark send failed: ${text}`);
   }
 }
+
+/* ===============================
+   ✅ ADD THIS (resolution email)
+================================ */
+
+export async function sendResolutionEmail({
+  to,
+  ticketNumber
+}) {
+  const payload = {
+    From: process.env.FROM_EMAIL,
+    To: to,
+    Subject: `Ticket Resolved — ${ticketNumber}`,
+    TextBody: `
+Hello,
+
+Your ticket ${ticketNumber} has been successfully resolved.
+
+If you have any further issues or questions, feel free to reply to this email.
+
+Thank you for your patience.
+Pariskq Support Team
+    `.trim(),
+  };
+
+  const res = await fetch(POSTMARK_URL, {
+    method: 'POST',
+    headers: {
+      'X-Postmark-Server-Token': process.env.POSTMARK_SERVER_TOKEN,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Postmark send failed: ${text}`);
+  }
+}

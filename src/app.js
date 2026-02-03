@@ -7,6 +7,9 @@ import bodyParser from 'body-parser';
 import { supabase } from './supabaseClient.js';
 import { runAutoTicketWorker } from './workers/autoTicketWorker.js';
 
+// ✅ NEW imports (add-only, no side effects)
+import { sendResolutionEmail } from './services/emailService.js';
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -26,13 +29,76 @@ app.get('/health', (_req, res) => {
 });
 
 /* ===============================
+   INTERNAL: TICKET RESOLVED HOOK
+   (NEW — does NOT affect existing flows)
+================================ */
+
+app.post('/internal/ticket-resolved', async (req, res) => {
+  try {
+    const secret = req.headers['x-internal-secret'];
+
+    if (secret !== process.env.INTERNAL_TRIGGER_SECRET) {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+
+    const { ticket_id } = req.body;
+
+    if (!ticket_id) {
+      return res.status(400).json({ error: 'ticket_id missing' });
+    }
+
+    // Fetch ticket directly — read-only operation
+    const { data: ticket, error } = await supabase
+      .from('tickets')
+      .select('id, ticket_number, status, opened_by_email')
+      .eq('id', ticket_id)
+      .single();
+
+    if (error || !ticket) {
+      return res.status(200).json({ ignored: 'ticket not found' });
+    }
+
+    // Safety guard — prevents accidental sends
+    if (ticket.status !== 'RESOLVED') {
+      return res.status(200).json({ ignored: 'status not resolved' });
+    }
+
+    if (!ticket.opened_by_email) {
+      return res.status(200).json({ ignored: 'no opened_by_email' });
+    }
+
+    // Idempotency check
+    const { data: alreadySent } = await supabase
+      .from('ticket_resolution_notifications')
+      .select('ticket_id')
+      .eq('ticket_id', ticket.id)
+      .single();
+
+    if (alreadySent) {
+      return res.status(200).json({ ignored: 'email already sent' });
+    }
+
+    // Send resolution email
+    await sendResolutionEmail({
+      to: ticket.opened_by_email,
+      ticketNumber: ticket.ticket_number,
+    });
+
+    // Mark as sent (idempotency)
+    await supabase
+      .from('ticket_resolution_notifications')
+      .insert({ ticket_id: ticket.id });
+
+    return res.status(200).json({ sent: true });
+  } catch (err) {
+    console.error('[ticket-resolved-hook]', err);
+    return res.status(500).json({ error: 'internal error' });
+  }
+});
+
+/* ===============================
    POSTMARK INBOUND WEBHOOK
-================================
- Contract:
- - Accept inbound email
- - Store raw payload
- - Mark as PENDING
- - Never crash caller
+   (UNCHANGED)
 ================================ */
 
 app.post('/postmark-webhook', async (req, res) => {
@@ -81,6 +147,7 @@ app.post('/postmark-webhook', async (req, res) => {
 
 /* ===============================
    WORKER BOOTSTRAP
+   (UNCHANGED)
 ================================ */
 
 async function startWorkerLoop() {
