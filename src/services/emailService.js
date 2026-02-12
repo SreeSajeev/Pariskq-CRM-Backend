@@ -1,4 +1,5 @@
 const POSTMARK_URL = 'https://api.postmarkapp.com/email';
+import { supabase } from '../config/supabase.js';
 
 export async function sendTicketConfirmation({
   to,
@@ -38,7 +39,75 @@ Pariskq Support Team
 }
 
 /* ===============================
-   ✅ ADD THIS (resolution email)
+   FE ACTION TOKEN EMAIL
+================================ */
+
+export async function sendFETokenEmail({
+  feId,
+  ticketNumber,
+  token,
+  type
+}) {
+  // fetch FE email
+  const { data: fe, error } = await supabase
+    .from('field_executives')
+    .select('email, name')
+    .eq('id', feId)
+    .single();
+
+  if (error || !fe?.email) {
+    throw new Error('Field Executive email not found');
+  }
+
+  const actionLabel =
+    type === 'RESOLUTION'
+      ? 'Resolution Action Required'
+      : 'On-site Action Required';
+
+  const actionText =
+    type === 'RESOLUTION'
+      ? 'upload the resolution proof'
+      : 'upload the on-site proof';
+
+  const actionLink = `${process.env.FIELD_OPS_URL}/fe/action/${token}`;
+
+  const payload = {
+    From: process.env.FROM_EMAIL,
+    To: fe.email,
+    Subject: `${actionLabel} — Ticket ${ticketNumber}`,
+    TextBody: `
+Hello ${fe.name || ''},
+
+You have been assigned a task for Ticket ${ticketNumber}.
+
+Please click the link below to ${actionText}:
+
+${actionLink}
+
+This link is time-sensitive.
+
+Thank you,
+Pariskq Operations Team
+    `.trim(),
+  };
+
+  const res = await fetch(POSTMARK_URL, {
+    method: 'POST',
+    headers: {
+      'X-Postmark-Server-Token': process.env.POSTMARK_SERVER_TOKEN,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Postmark send failed: ${text}`);
+  }
+}
+
+/* ===============================
+   RESOLUTION EMAIL (CLIENT)
 ================================ */
 
 export async function sendResolutionEmail({

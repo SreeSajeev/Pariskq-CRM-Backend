@@ -1,3 +1,4 @@
+
 // src/controllers/ticketController.js
 
 import { supabase } from "../config/supabase.js"
@@ -95,11 +96,25 @@ export async function generateOnSiteToken(req, res) {
 }
 
 /**
- * GENERATE RESOLUTION TOKEN
+ * VERIFY ON-SITE & ISSUE RESOLUTION TOKEN
+ * (Step 5 → Step 6 bridge)
  */
-export async function generateResolutionToken(req, res) {
+export async function verifyOnSiteAndIssueResolution(req, res) {
   try {
     const ticketId = req.params.id
+
+    const { data: ticket } = await supabase
+      .from("tickets")
+      .select("status, ticket_number")
+      .eq("id", ticketId)
+      .single()
+
+    if (!ticket) {
+      return res.status(404).json({ error: "Ticket not found" })
+    }
+
+    // Guardrail
+    assertValidTransition(ticket.status, "ON_SITE")
 
     const { data: assignment } = await supabase
       .from("ticket_assignments")
@@ -111,20 +126,21 @@ export async function generateResolutionToken(req, res) {
       return res.status(400).json({ error: "FE not assigned" })
     }
 
-    const { data: ticket } = await supabase
-      .from("tickets")
-      .select("status, ticket_number")
-      .eq("id", ticketId)
-      .single()
+    // Mark ON_SITE token as used
+    await supabase
+      .from("fe_action_tokens")
+      .update({ used: true })
+      .eq("ticket_id", ticketId)
+      .eq("action_type", "ON_SITE")
 
-    assertValidTransition(ticket.status, "ON_SITE")
-
+    // Generate RESOLUTION token
     const token = await createActionToken({
       ticketId,
       feId: assignment.fe_id,
       actionType: "RESOLUTION",
     })
 
+    // Advance ticket lifecycle (still not closed)
     await supabase
       .from("tickets")
       .update({ status: "ON_SITE" })
@@ -144,7 +160,7 @@ export async function generateResolutionToken(req, res) {
 }
 
 /**
- * VERIFY & CLOSE TICKET
+ * VERIFY RESOLUTION & CLOSE TICKET
  */
 export async function verifyAndCloseTicket(req, res) {
   try {
