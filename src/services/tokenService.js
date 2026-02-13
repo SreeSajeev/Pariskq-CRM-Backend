@@ -1,7 +1,7 @@
 // src/services/tokenService.js
 
 import crypto from "crypto"
-import { supabase } from "../config/supabase.js"
+import { supabase } from "../supabaseClient.js"
 
 export async function createActionToken({
   ticketId,

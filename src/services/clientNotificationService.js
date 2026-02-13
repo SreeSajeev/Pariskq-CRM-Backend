@@ -1,6 +1,6 @@
 // src/services/clientNotificationService.js
 
-import { supabase } from "../config/supabase.js"
+import { supabase } from "../supabaseClient.js"
 import { sendClientClosureEmail } from "./emailService.js"
 
 export async function handleClientResolutionNotification(clientEmail) {

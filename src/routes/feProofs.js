@@ -1,7 +1,7 @@
 // src/routes/feProofs.js
 
 import express from "express"
-import { supabase } from "../config/supabase.js"
+import { supabase } from "../supabaseClient.js"
 import { validateActionToken } from "../services/tokenService.js"
 import { assertValidTransition } from "../services/ticketStateMachine.js"
 
