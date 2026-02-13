@@ -7,8 +7,11 @@ import bodyParser from 'body-parser';
 import { supabase } from './supabaseClient.js';
 import { runAutoTicketWorker } from './workers/autoTicketWorker.js';
 
-// ✅ NEW imports (add-only, no side effects)
+// ✅ Email services (existing)
 import { sendResolutionEmail } from './services/emailService.js';
+
+// ✅ CRITICAL: tickets router (FIX)
+import ticketsRouter from './routes/tickets.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,6 +22,13 @@ const PORT = process.env.PORT || 3000;
 
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
+
+/* ===============================
+   ROUTES
+================================ */
+
+// ✅ CRITICAL: mount tickets router (FIX)
+app.use('/tickets', ticketsRouter);
 
 /* ===============================
    HEALTH CHECK
@@ -182,4 +192,3 @@ app.listen(PORT, () => {
   console.log(`🚀 Backend running on port ${PORT}`);
   startWorkerLoop();
 });
-
