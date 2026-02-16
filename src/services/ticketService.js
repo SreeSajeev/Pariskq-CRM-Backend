@@ -23,46 +23,51 @@ export async function createTicket(parsed, rawEmail) {
   return ticketNumber;
 }
 */
-import { generateTicketNumber } from '../utils/ticketNumber.js';
-import { insertTicket } from '../repositories/ticketsRepo.js';
-import { sendTicketConfirmation } from './emailService.js'; 
+// src/services/ticketService.js
 
+import { generateTicketNumber } from '../utils/ticketNumber.js'
+import { insertTicket } from '../repositories/ticketsRepo.js'
+import { sendTicketConfirmation } from './emailService.js'
+
+/* =====================================================
+   CREATE TICKET — AUTHORITATIVE
+===================================================== */
 export async function createTicket(parsed, rawEmail) {
   /* ===============================
-     VALIDATION / GUARD CLAUSES
+     VALIDATION (HARD FAILS)
   ================================ */
 
   if (!parsed) {
-    const err = new Error('Parsed email is null in createTicket');
-    err.code = 'PARSED_EMAIL_NULL';
-    throw err;
+    const err = new Error('Parsed email is null in createTicket')
+    err.code = 'PARSED_EMAIL_NULL'
+    throw err
   }
 
   if (parsed.confidence_score == null) {
-    const err = new Error('Parsed email missing confidence_score');
-    err.code = 'CONFIDENCE_SCORE_MISSING';
-    throw err;
+    const err = new Error('Parsed email missing confidence_score')
+    err.code = 'CONFIDENCE_SCORE_MISSING'
+    throw err
   }
 
   if (!rawEmail?.from_email) {
-    const err = new Error('Missing sender email in raw email');
-    err.code = 'SENDER_EMAIL_MISSING';
-    throw err;
+    const err = new Error('Missing sender email in raw email')
+    err.code = 'SENDER_EMAIL_MISSING'
+    throw err
   }
 
   /* ===============================
-     BUSINESS DECISIONS
+     BUSINESS RULES
   ================================ */
 
-  const ticketNumber = generateTicketNumber();
+  const ticketNumber = generateTicketNumber()
 
   const status =
     parsed.confidence_score >= 95
       ? 'OPEN'
-      : 'NEEDS_REVIEW';
+      : 'NEEDS_REVIEW'
 
   /* ===============================
-     PERSISTENCE
+     PERSISTENCE (SOURCE OF TRUTH)
   ================================ */
 
   await insertTicket({
@@ -78,29 +83,30 @@ export async function createTicket(parsed, rawEmail) {
     confidence_score: parsed.confidence_score,
     needs_review: parsed.needs_review,
     source: 'EMAIL',
-  });
+  })
 
   /* ===============================
      SIDE EFFECTS (NON-BLOCKING)
+     🔥 EMAIL MUST NEVER BLOCK
   ================================ */
 
-  try {
-  await sendTicketConfirmation({
-      to: rawEmail.from_email,
-      ticketNumber,
-    });
-  } catch (err) {
-    console.error('[EMAIL] Confirmation failed', {
+  // Fire-and-forget — demo safe
+  sendTicketConfirmation({
+    toEmail: rawEmail.from_email,
+    ticketNumber,
+  }).catch(err => {
+    console.error('[EMAIL:TICKET_CONFIRMATION]', {
       ticketNumber,
       message: err.message,
-    });
-  }
-
-  
+    })
+  })
 
   /* ===============================
      RESULT
   ================================ */
 
-  return ticketNumber;
+  return {
+    ticketNumber,
+    status,
+  }
 }

@@ -144,19 +144,74 @@ Pariskq Support Team
 }
 */
 // src/services/emailService.js
+// src/services/emailService.js
 
-const POSTMARK_URL = 'https://api.postmarkapp.com/email'
 import { supabase } from '../supabaseClient.js'
 
-function assertEnv(name) {
-  if (!process.env[name]) {
-    throw new Error(`Missing env var: ${name}`)
+const POSTMARK_URL = 'https://api.postmarkapp.com/email'
+
+function canSendEmail() {
+  return (
+    process.env.POSTMARK_SERVER_TOKEN &&
+    process.env.FROM_EMAIL
+  )
+}
+
+async function sendEmail(payload, tag) {
+  if (!canSendEmail()) {
+    console.warn(`[EMAIL SKIPPED] ${tag} — env not configured`)
+    return
+  }
+
+  try {
+    const res = await fetch(POSTMARK_URL, {
+      method: 'POST',
+      headers: {
+        'X-Postmark-Server-Token': process.env.POSTMARK_SERVER_TOKEN,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+
+    if (!res.ok) {
+      const text = await res.text()
+      console.error(`[EMAIL FAILED] ${tag}`, text)
+    }
+  } catch (err) {
+    console.error(`[EMAIL ERROR] ${tag}`, err.message)
   }
 }
 
-/* ===============================
-   FE ACTION TOKEN EMAIL
-================================ */
+/* =====================================================
+   1️⃣ TICKET CONFIRMATION EMAIL
+===================================================== */
+export async function sendTicketConfirmation({
+  toEmail,
+  ticketNumber,
+}) {
+  if (!toEmail) return
+
+  await sendEmail(
+    {
+      From: process.env.FROM_EMAIL,
+      To: toEmail,
+      Subject: `Ticket Created — ${ticketNumber}`,
+      TextBody: `
+Your ticket ${ticketNumber} has been successfully created.
+
+Our operations team will review it shortly.
+
+Thank you,
+Pariskq Operations Team
+      `.trim(),
+    },
+    'TICKET_CONFIRMATION'
+  )
+}
+
+/* =====================================================
+   2️⃣ FE ACTION TOKEN EMAIL
+===================================================== */
 export async function sendFETokenEmail({
   feId,
   ticketNumber,
@@ -164,10 +219,6 @@ export async function sendFETokenEmail({
   type,
 }) {
   try {
-    assertEnv('POSTMARK_SERVER_TOKEN')
-    assertEnv('FROM_EMAIL')
-    assertEnv('FIELD_OPS_URL')
-
     const { data: fe, error } = await supabase
       .from('field_executives')
       .select('email, name')
@@ -175,7 +226,8 @@ export async function sendFETokenEmail({
       .single()
 
     if (error || !fe?.email) {
-      throw new Error('Field Executive email not found')
+      console.warn('[FE EMAIL SKIPPED] FE not found')
+      return
     }
 
     const actionLabel =
@@ -190,11 +242,12 @@ export async function sendFETokenEmail({
 
     const actionLink = `${process.env.FIELD_OPS_URL}/fe/action/${token}`
 
-    const payload = {
-      From: process.env.FROM_EMAIL,
-      To: fe.email,
-      Subject: `${actionLabel} — Ticket ${ticketNumber}`,
-      TextBody: `
+    await sendEmail(
+      {
+        From: process.env.FROM_EMAIL,
+        To: fe.email,
+        Subject: `${actionLabel} — Ticket ${ticketNumber}`,
+        TextBody: `
 Hello ${fe.name || ''},
 
 You have been assigned a task for Ticket ${ticketNumber}.
@@ -207,24 +260,38 @@ This link is time-sensitive.
 
 Thank you,
 Pariskq Operations Team
-      `.trim(),
-    }
-
-    const res = await fetch(POSTMARK_URL, {
-      method: 'POST',
-      headers: {
-        'X-Postmark-Server-Token': process.env.POSTMARK_SERVER_TOKEN,
-        'Content-Type': 'application/json',
+        `.trim(),
       },
-      body: JSON.stringify(payload),
-    })
-
-    if (!res.ok) {
-      const text = await res.text()
-      console.error('[EMAIL FAILED]', text)
-    }
+      'FE_TOKEN'
+    )
   } catch (err) {
-    // 🔥 CRITICAL: DO NOT THROW
     console.error('[sendFETokenEmail ERROR]', err.message)
   }
+}
+
+/* =====================================================
+   3️⃣ TICKET RESOLUTION EMAIL
+===================================================== */
+export async function sendResolutionEmail({
+  toEmail,
+  ticketNumber,
+}) {
+  if (!toEmail) return
+
+  await sendEmail(
+    {
+      From: process.env.FROM_EMAIL,
+      To: toEmail,
+      Subject: `Ticket Resolved — ${ticketNumber}`,
+      TextBody: `
+Your ticket ${ticketNumber} has been resolved.
+
+If you have any further issues, feel free to raise a new ticket.
+
+Thank you,
+Pariskq Operations Team
+      `.trim(),
+    },
+    'TICKET_RESOLUTION'
+  )
 }
