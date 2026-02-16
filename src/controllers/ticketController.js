@@ -1,7 +1,7 @@
 
 // src/controllers/ticketC// src/controllers/ticketController.js
 // Backend-authoritative, demo-safe lifecycle controller
-
+// works
 import { supabase } from "../supabaseClient.js"
 import { assertValidTransition } from "../services/ticketStateMachine.js"
 import {
