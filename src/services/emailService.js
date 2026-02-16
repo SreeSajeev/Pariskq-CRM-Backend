@@ -151,7 +151,7 @@ import { supabase } from '../supabaseClient.js'
 const POSTMARK_URL = 'https://api.postmarkapp.com/email'
 
 /* =====================================================
-   ENV GUARDS (DEMO SAFE)
+   ENV GUARD (NEVER CRASH DEMO)
 ===================================================== */
 function canSendEmail() {
   return Boolean(
@@ -161,7 +161,7 @@ function canSendEmail() {
 }
 
 /* =====================================================
-   CORE EMAIL SENDER (NEVER THROWS)
+   CORE SENDER (SINGLE AUTHORITY)
 ===================================================== */
 async function sendEmail(payload, tag) {
   if (!canSendEmail()) {
@@ -189,7 +189,7 @@ async function sendEmail(payload, tag) {
 }
 
 /* =====================================================
-   1️⃣ TICKET CONFIRMATION EMAIL
+   1️⃣ TICKET CONFIRMATION
 ===================================================== */
 export async function sendTicketConfirmation({
   toEmail,
@@ -216,7 +216,7 @@ Pariskq Operations Team
 }
 
 /* =====================================================
-   2️⃣ FIELD EXECUTIVE ACTION TOKEN EMAIL
+   2️⃣ FE ACTION TOKEN
 ===================================================== */
 export async function sendFETokenEmail({
   feId,
@@ -281,10 +281,10 @@ Pariskq Operations Team
 }
 
 /* =====================================================
-   3️⃣ CLIENT TICKET CLOSURE EMAIL
-   (⚠️ NAME MATCHES IMPORTS)
+   3️⃣ CLIENT RESOLUTION / CLOSURE
+   ⚠️ EXPORT ALL ALIASES TO STOP CRASHES
 ===================================================== */
-export async function sendClientClosureEmail({
+async function _sendClientResolutionEmail({
   toEmail,
   ticketNumber,
 }) {
@@ -298,13 +298,19 @@ export async function sendClientClosureEmail({
       TextBody: `
 Your ticket ${ticketNumber} has been resolved.
 
-If you face any further issues, you can reply to this email
-or raise a new ticket.
+If you have any further issues, feel free to raise a new ticket.
 
 Thank you,
 Pariskq Operations Team
       `.trim(),
     },
-    'CLIENT_CLOSURE'
+    'CLIENT_RESOLUTION'
   )
 }
+
+/* =====================================================
+   🔒 EXPORT COMPATIBILITY LAYER
+   (THIS IS WHAT FIXES RENDER)
+===================================================== */
+export const sendResolutionEmail = _sendClientResolutionEmail
+export const sendClientClosureEmail = _sendClientResolutionEmail
