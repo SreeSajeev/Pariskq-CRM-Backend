@@ -1,18 +1,18 @@
 
-// src/controllers/ticketController.js
+// src/controllers/ticketC// src/controllers/ticketController.js
+// Backend-authoritative, demo-safe lifecycle controller
 
 import { supabase } from "../supabaseClient.js"
 import { assertValidTransition } from "../services/ticketStateMachine.js"
 import {
   createActionToken,
-  validateActionToken,
 } from "../services/tokenService.js"
 import { sendFETokenEmail } from "../services/emailService.js"
 import { handleClientResolutionNotification } from "../services/clientNotificationService.js"
 
-/**
- * ASSIGN FE TO TICKET
- */
+/* =====================================================
+   ASSIGN FE TO TICKET
+===================================================== */
 export async function assignFieldExecutive(req, res) {
   try {
     const ticketId = req.params.id
@@ -46,9 +46,9 @@ export async function assignFieldExecutive(req, res) {
   }
 }
 
-/**
- * GENERATE ON-SITE TOKEN
- */
+/* =====================================================
+   GENERATE ON-SITE TOKEN (VISIBLE + EMAILED)
+===================================================== */
 export async function generateOnSiteToken(req, res) {
   try {
     const ticketId = req.params.id
@@ -77,6 +77,15 @@ export async function generateOnSiteToken(req, res) {
       actionType: "ON_SITE",
     })
 
+    // 🔐 Persist token for UI (read-only)
+    await supabase
+      .from("ticket_assignments")
+      .update({
+        active_token: token,
+        active_token_type: "ON_SITE",
+      })
+      .eq("ticket_id", ticketId)
+
     await supabase
       .from("tickets")
       .update({ status: "EN_ROUTE" })
@@ -95,10 +104,9 @@ export async function generateOnSiteToken(req, res) {
   }
 }
 
-/**
- * VERIFY ON-SITE & ISSUE RESOLUTION TOKEN
- * (Step 5 → Step 6 bridge)
- */
+/* =====================================================
+   VERIFY ON-SITE & ISSUE RESOLUTION TOKEN
+===================================================== */
 export async function verifyOnSiteAndIssueResolution(req, res) {
   try {
     const ticketId = req.params.id
@@ -113,7 +121,6 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
       return res.status(404).json({ error: "Ticket not found" })
     }
 
-    // Guardrail
     assertValidTransition(ticket.status, "ON_SITE")
 
     const { data: assignment } = await supabase
@@ -126,21 +133,28 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
       return res.status(400).json({ error: "FE not assigned" })
     }
 
-    // Mark ON_SITE token as used
+    // Mark ON_SITE token used
     await supabase
       .from("fe_action_tokens")
       .update({ used: true })
       .eq("ticket_id", ticketId)
       .eq("action_type", "ON_SITE")
 
-    // Generate RESOLUTION token
     const token = await createActionToken({
       ticketId,
       feId: assignment.fe_id,
       actionType: "RESOLUTION",
     })
 
-    // Advance ticket lifecycle (still not closed)
+    // 🔐 Persist resolution token for UI
+    await supabase
+      .from("ticket_assignments")
+      .update({
+        active_token: token,
+        active_token_type: "RESOLUTION",
+      })
+      .eq("ticket_id", ticketId)
+
     await supabase
       .from("tickets")
       .update({ status: "ON_SITE" })
@@ -159,16 +173,16 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
   }
 }
 
-/**
- * VERIFY RESOLUTION & CLOSE TICKET
- */
+/* =====================================================
+   VERIFY RESOLUTION & CLOSE TICKET
+===================================================== */
 export async function verifyAndCloseTicket(req, res) {
   try {
     const ticketId = req.params.id
 
     const { data: ticket } = await supabase
       .from("tickets")
-      .select("status, opened_by_email")
+      .select("status, opened_by_email, ticket_number")
       .eq("id", ticketId)
       .single()
 
@@ -183,7 +197,10 @@ export async function verifyAndCloseTicket(req, res) {
       .update({ status: "RESOLVED" })
       .eq("id", ticketId)
 
-    await handleClientResolutionNotification(ticket.opened_by_email)
+    await handleClientResolutionNotification({
+      toEmail: ticket.opened_by_email,
+      ticketNumber: ticket.ticket_number,
+    })
 
     return res.json({ success: true })
   } catch (err) {

@@ -145,10 +145,9 @@ Pariskq Support Team
 */
 // src/services/emailService.js
 // src/services/emailService.js
-// src/services/emailService.js
-import { supabase } from '../supabaseClient.js'
+import { supabase } from "../supabaseClient.js";
 
-const POSTMARK_URL = 'https://api.postmarkapp.com/email'
+const POSTMARK_URL = "https://api.postmarkapp.com/email";
 
 /* =====================================================
    ENV GUARD (NEVER CRASH DEMO)
@@ -157,7 +156,7 @@ function canSendEmail() {
   return Boolean(
     process.env.POSTMARK_SERVER_TOKEN &&
     process.env.FROM_EMAIL
-  )
+  );
 }
 
 /* =====================================================
@@ -165,37 +164,34 @@ function canSendEmail() {
 ===================================================== */
 async function sendEmail(payload, tag) {
   if (!canSendEmail()) {
-    console.warn(`[EMAIL SKIPPED] ${tag} — env not configured`)
-    return
+    console.warn(`[EMAIL SKIPPED] ${tag} — env not configured`);
+    return;
   }
 
   try {
     const res = await fetch(POSTMARK_URL, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'X-Postmark-Server-Token': process.env.POSTMARK_SERVER_TOKEN,
-        'Content-Type': 'application/json',
+        "X-Postmark-Server-Token": process.env.POSTMARK_SERVER_TOKEN,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
-    })
+    });
 
     if (!res.ok) {
-      const text = await res.text()
-      console.error(`[EMAIL FAILED] ${tag}`, text)
+      const text = await res.text();
+      console.error(`[EMAIL FAILED] ${tag}`, text);
     }
   } catch (err) {
-    console.error(`[EMAIL ERROR] ${tag}`, err.message)
+    console.error(`[EMAIL ERROR] ${tag}`, err.message);
   }
 }
 
 /* =====================================================
    1️⃣ TICKET CONFIRMATION
 ===================================================== */
-export async function sendTicketConfirmation({
-  toEmail,
-  ticketNumber,
-}) {
-  if (!toEmail) return
+export async function sendTicketConfirmation({ toEmail, ticketNumber }) {
+  if (!toEmail) return;
 
   await sendEmail(
     {
@@ -211,8 +207,8 @@ Thank you,
 Pariskq Operations Team
       `.trim(),
     },
-    'TICKET_CONFIRMATION'
-  )
+    "TICKET_CONFIRMATION"
+  );
 }
 
 /* =====================================================
@@ -225,70 +221,54 @@ export async function sendFETokenEmail({
   type,
 }) {
   try {
-    const { data: fe, error } = await supabase
-      .from('field_executives')
-      .select('email, name')
-      .eq('id', feId)
-      .single()
+    const { data: fe } = await supabase
+      .from("field_executives")
+      .select("email, name")
+      .eq("id", feId)
+      .single();
 
-    if (error || !fe?.email) {
-      console.warn('[FE EMAIL SKIPPED] FE not found')
-      return
-    }
+    if (!fe?.email || !process.env.FIELD_OPS_URL) return;
 
-    if (!process.env.FIELD_OPS_URL) {
-      console.warn('[FE EMAIL SKIPPED] FIELD_OPS_URL missing')
-      return
-    }
+    const label =
+      type === "RESOLUTION"
+        ? "Resolution Action Required"
+        : "On-site Action Required";
 
-    const actionLabel =
-      type === 'RESOLUTION'
-        ? 'Resolution Action Required'
-        : 'On-site Action Required'
-
-    const actionText =
-      type === 'RESOLUTION'
-        ? 'upload the resolution proof'
-        : 'upload the on-site proof'
-
-    const actionLink = `${process.env.FIELD_OPS_URL}/fe/action/${token}`
+    const link = `${process.env.FIELD_OPS_URL}/fe/action/${token}`;
 
     await sendEmail(
       {
         From: process.env.FROM_EMAIL,
         To: fe.email,
-        Subject: `${actionLabel} — Ticket ${ticketNumber}`,
+        Subject: `${label} — Ticket ${ticketNumber}`,
         TextBody: `
-Hello ${fe.name || ''},
+Hello ${fe.name || ""},
 
 You have been assigned a task for Ticket ${ticketNumber}.
 
-Please click the link below to ${actionText}:
+Please complete the required action using the link below:
 
-${actionLink}
-
-This link is time-sensitive.
+${link}
 
 Thank you,
 Pariskq Operations Team
         `.trim(),
       },
-      'FE_ACTION_TOKEN'
-    )
+      "FE_ACTION_TOKEN"
+    );
   } catch (err) {
-    console.error('[sendFETokenEmail ERROR]', err.message)
+    console.error("[sendFETokenEmail]", err.message);
   }
 }
 
 /* =====================================================
-   3️⃣ CLIENT RESOLUTION / CLOSURE
-   ⚠️ EXPORT ALL ALIASES TO STOP CRASHES
+   3️⃣ CLIENT RESOLUTION (SINGLE SOURCE)
 ===================================================== */
-async function _sendClientResolutionEmail({
+export async function sendClientResolutionEmail({
   toEmail,
   ticketNumber,
 }) {
-  if (!toEmail) return
+  if (!toEmail) return;
 
   await sendEmail(
     {
@@ -296,21 +276,20 @@ async function _sendClientResolutionEmail({
       To: toEmail,
       Subject: `Ticket Resolved — ${ticketNumber}`,
       TextBody: `
-Your ticket ${ticketNumber} has been resolved.
+Your ticket ${ticketNumber} has been successfully resolved.
 
-If you have any further issues, feel free to raise a new ticket.
+If you have further issues, feel free to raise a new ticket.
 
 Thank you,
 Pariskq Operations Team
       `.trim(),
     },
-    'CLIENT_RESOLUTION'
-  )
+    "CLIENT_RESOLUTION"
+  );
 }
 
 /* =====================================================
-   🔒 EXPORT COMPATIBILITY LAYER
-   (THIS IS WHAT FIXES RENDER)
+   🔒 EXPORT ALIASES (RENDER-SAFE)
 ===================================================== */
-export const sendResolutionEmail = _sendClientResolutionEmail
-export const sendClientClosureEmail = _sendClientResolutionEmail
+export const sendResolutionEmail = sendClientResolutionEmail;
+export const sendClientClosureEmail = sendClientResolutionEmail;
