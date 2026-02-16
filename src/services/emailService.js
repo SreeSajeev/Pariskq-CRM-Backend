@@ -145,18 +145,24 @@ Pariskq Support Team
 */
 // src/services/emailService.js
 // src/services/emailService.js
-
+// src/services/emailService.js
 import { supabase } from '../supabaseClient.js'
 
 const POSTMARK_URL = 'https://api.postmarkapp.com/email'
 
+/* =====================================================
+   ENV GUARDS (DEMO SAFE)
+===================================================== */
 function canSendEmail() {
-  return (
+  return Boolean(
     process.env.POSTMARK_SERVER_TOKEN &&
     process.env.FROM_EMAIL
   )
 }
 
+/* =====================================================
+   CORE EMAIL SENDER (NEVER THROWS)
+===================================================== */
 async function sendEmail(payload, tag) {
   if (!canSendEmail()) {
     console.warn(`[EMAIL SKIPPED] ${tag} — env not configured`)
@@ -210,7 +216,7 @@ Pariskq Operations Team
 }
 
 /* =====================================================
-   2️⃣ FE ACTION TOKEN EMAIL
+   2️⃣ FIELD EXECUTIVE ACTION TOKEN EMAIL
 ===================================================== */
 export async function sendFETokenEmail({
   feId,
@@ -227,6 +233,11 @@ export async function sendFETokenEmail({
 
     if (error || !fe?.email) {
       console.warn('[FE EMAIL SKIPPED] FE not found')
+      return
+    }
+
+    if (!process.env.FIELD_OPS_URL) {
+      console.warn('[FE EMAIL SKIPPED] FIELD_OPS_URL missing')
       return
     }
 
@@ -262,7 +273,7 @@ Thank you,
 Pariskq Operations Team
         `.trim(),
       },
-      'FE_TOKEN'
+      'FE_ACTION_TOKEN'
     )
   } catch (err) {
     console.error('[sendFETokenEmail ERROR]', err.message)
@@ -270,9 +281,10 @@ Pariskq Operations Team
 }
 
 /* =====================================================
-   3️⃣ TICKET RESOLUTION EMAIL
+   3️⃣ CLIENT TICKET CLOSURE EMAIL
+   (⚠️ NAME MATCHES IMPORTS)
 ===================================================== */
-export async function sendResolutionEmail({
+export async function sendClientClosureEmail({
   toEmail,
   ticketNumber,
 }) {
@@ -286,12 +298,13 @@ export async function sendResolutionEmail({
       TextBody: `
 Your ticket ${ticketNumber} has been resolved.
 
-If you have any further issues, feel free to raise a new ticket.
+If you face any further issues, you can reply to this email
+or raise a new ticket.
 
 Thank you,
 Pariskq Operations Team
       `.trim(),
     },
-    'TICKET_RESOLUTION'
+    'CLIENT_CLOSURE'
   )
 }
