@@ -36,10 +36,10 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // ✅ Tickets (existing)
 app.use('/tickets', ticketsRouter);
 
-// 🔐 FE token validation (read-only lifecycle entry)
+// 🔐 FE token validation
 app.use(feActionsRouter);
 
-// 📤 FE proof upload (authoritative lifecycle mutation)
+// 📤 FE proof upload
 app.post('/fe/proof', uploadFeProof);
 
 /* ===============================
@@ -96,8 +96,9 @@ app.post('/internal/ticket-resolved', async (req, res) => {
       return res.status(200).json({ ignored: 'email already sent' });
     }
 
+    // ✅ FIXED PARAM NAME
     await sendResolutionEmail({
-      to: ticket.opened_by_email,
+      toEmail: ticket.opened_by_email,
       ticketNumber: ticket.ticket_number,
     });
 

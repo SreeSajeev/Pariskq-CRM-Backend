@@ -1,6 +1,5 @@
 
-//
-// src/controllers/ticketController.js
+//// src/controllers/ticketController.js
 // Backend-authoritative, demo-safe lifecycle controller
 
 import { supabase } from "../supabaseClient.js";
@@ -36,18 +35,14 @@ export async function assignFieldExecutive(req, res) {
         fe_id: feId,
       });
 
-    if (insertError) {
-      throw insertError;
-    }
+    if (insertError) throw insertError;
 
     const { error: updateError } = await supabase
       .from("tickets")
       .update({ status: "ASSIGNED" })
       .eq("id", ticketId);
 
-    if (updateError) {
-      throw updateError;
-    }
+    if (updateError) throw updateError;
 
     return res.json({ success: true });
   } catch (err) {
@@ -84,35 +79,16 @@ export async function generateOnSiteToken(req, res) {
 
     assertValidTransition(ticket.status, "EN_ROUTE");
 
-    const nowISO = new Date().toISOString();
-
-    const { data: existingToken } = await supabase
-      .from("fe_action_tokens")
-      .select("id")
-      .eq("ticket_id", ticketId)
-      .eq("action_type", "ON_SITE")
-      .eq("used", false)
-      .gt("expires_at", nowISO)
-      .maybeSingle();
-
-    if (existingToken) {
-      return res.status(400).json({ error: "ON_SITE token already active" });
-    }
-
     const token = await createActionToken({
       ticketId,
       feId: assignment.fe_id,
       actionType: "ON_SITE",
     });
 
-    const { error: updateError } = await supabase
+    await supabase
       .from("tickets")
       .update({ status: "EN_ROUTE" })
       .eq("id", ticketId);
-
-    if (updateError) {
-      throw updateError;
-    }
 
     await sendFETokenEmail({
       feId: assignment.fe_id,
@@ -134,30 +110,45 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
   try {
     const ticketId = req.params.id;
 
-    const { data: ticket, error: ticketError } = await supabase
+    const { data: ticket } = await supabase
       .from("tickets")
       .select("status, ticket_number")
       .eq("id", ticketId)
       .single();
 
-    if (ticketError || !ticket) {
+    if (!ticket) {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
     assertValidTransition(ticket.status, "ON_SITE");
 
-    const { data: assignment, error: assignmentError } = await supabase
+    /* 🔒 NEW: ENSURE ON_SITE PROOF EXISTS */
+    const { data: onsiteProof } = await supabase
+      .from("ticket_comments")
+      .select("id")
+      .eq("ticket_id", ticketId)
+      .eq("source", "FE")
+      .ilike("body", "%ON_SITE proof uploaded%")
+      .maybeSingle();
+
+    if (!onsiteProof) {
+      return res.status(400).json({
+        error: "ON_SITE proof not uploaded",
+      });
+    }
+
+    const { data: assignment } = await supabase
       .from("ticket_assignments")
       .select("fe_id")
       .eq("ticket_id", ticketId)
       .single();
 
-    if (assignmentError || !assignment) {
+    if (!assignment) {
       return res.status(400).json({ error: "FE not assigned" });
     }
 
-    // Consume ON_SITE token atomically
-    const { data: consumed, error: consumeError } = await supabase
+    /* 🔐 Consume ON_SITE token */
+    const { data: consumed } = await supabase
       .from("fe_action_tokens")
       .update({ used: true })
       .eq("ticket_id", ticketId)
@@ -166,30 +157,9 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
       .select("id")
       .limit(1);
 
-    if (consumeError) {
-      throw consumeError;
-    }
-
     if (!consumed || consumed.length === 0) {
       return res.status(400).json({
         error: "ON_SITE token already consumed or missing",
-      });
-    }
-
-    const nowISO = new Date().toISOString();
-
-    const { data: existingResolution } = await supabase
-      .from("fe_action_tokens")
-      .select("id")
-      .eq("ticket_id", ticketId)
-      .eq("action_type", "RESOLUTION")
-      .eq("used", false)
-      .gt("expires_at", nowISO)
-      .maybeSingle();
-
-    if (existingResolution) {
-      return res.status(400).json({
-        error: "RESOLUTION token already active",
       });
     }
 
@@ -198,15 +168,6 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
       feId: assignment.fe_id,
       actionType: "RESOLUTION",
     });
-
-    const { error: updateError } = await supabase
-      .from("tickets")
-      .update({ status: "ON_SITE" })
-      .eq("id", ticketId);
-
-    if (updateError) {
-      throw updateError;
-    }
 
     await sendFETokenEmail({
       feId: assignment.fe_id,
@@ -228,43 +189,40 @@ export async function verifyAndCloseTicket(req, res) {
   try {
     const ticketId = req.params.id;
 
-    const { data: ticket, error: ticketError } = await supabase
+    const { data: ticket } = await supabase
       .from("tickets")
       .select("status, opened_by_email, ticket_number")
       .eq("id", ticketId)
       .single();
 
-    if (ticketError || !ticket) {
+    if (!ticket) {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
     assertValidTransition(ticket.status, "RESOLVED");
 
-    const { data: pendingResolution } = await supabase
-      .from("fe_action_tokens")
+    /* 🔒 NEW: ENSURE RESOLUTION PROOF EXISTS */
+    const { data: resolutionProof } = await supabase
+      .from("ticket_comments")
       .select("id")
       .eq("ticket_id", ticketId)
-      .eq("action_type", "RESOLUTION")
-      .eq("used", false)
+      .eq("source", "FE")
+      .ilike("body", "%RESOLUTION proof uploaded%")
       .maybeSingle();
 
-    if (pendingResolution) {
+    if (!resolutionProof) {
       return res.status(400).json({
-        error: "Resolution proof not yet verified",
+        error: "Resolution proof not uploaded",
       });
     }
 
-    const { error: updateError } = await supabase
+    await supabase
       .from("tickets")
       .update({
         status: "RESOLVED",
         resolved_at: new Date().toISOString(),
       })
       .eq("id", ticketId);
-
-    if (updateError) {
-      throw updateError;
-    }
 
     await handleClientResolutionNotification({
       toEmail: ticket.opened_by_email,
