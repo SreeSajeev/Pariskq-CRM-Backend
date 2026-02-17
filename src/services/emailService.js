@@ -75,9 +75,31 @@ export async function sendFETokenEmail({
   type,
 }) {
   try {
-    // 🔒 Enforce lifecycle correctness
-    if (type !== "ON_SITE" && type !== "RESOLUTION") {
-      console.error("[sendFETokenEmail] Invalid action type:", type);
+    console.log("[FE TOKEN EMAIL] START");
+
+    if (!feId) {
+      console.error("[FE TOKEN EMAIL] Missing feId");
+      return;
+    }
+
+    if (!ticketNumber) {
+      console.error("[FE TOKEN EMAIL] Missing ticketNumber");
+      return;
+    }
+
+    if (!token) {
+      console.error("[FE TOKEN EMAIL] Missing token");
+      return;
+    }
+
+    // 🔥 Accept both string or object token
+    const tokenId =
+      typeof token === "string"
+        ? token
+        : token.tokenId || token.id;
+
+    if (!tokenId) {
+      console.error("[FE TOKEN EMAIL] Invalid token format:", token);
       return;
     }
 
@@ -88,27 +110,30 @@ export async function sendFETokenEmail({
       .single();
 
     if (error || !fe?.email) {
-      console.error("[sendFETokenEmail] FE email not found", feId);
+      console.error("[FE TOKEN EMAIL] FE email not found:", feId);
       return;
     }
 
     if (!process.env.FIELD_OPS_URL) {
-      console.error("[sendFETokenEmail] FIELD_OPS_URL not set");
+      console.error("[FE TOKEN EMAIL] FIELD_OPS_URL missing");
       return;
     }
 
-    const label =
+    const actionLabel =
       type === "RESOLUTION"
         ? "Resolution Action Required"
-        : "On-site Action Required";
+        : "On-Site Action Required";
 
-    const link = `${process.env.FIELD_OPS_URL}/fe/action/${token}`;
+    const link = `${process.env.FIELD_OPS_URL}/fe/action/${tokenId}`;
+
+    console.log("[FE TOKEN EMAIL] Sending to:", fe.email);
+    console.log("[FE TOKEN EMAIL] Link:", link);
 
     await sendEmail(
       {
         From: process.env.FROM_EMAIL,
         To: fe.email,
-        Subject: `${label} — Ticket ${ticketNumber}`,
+        Subject: `${actionLabel} — Ticket ${ticketNumber}`,
         TextBody: `
 Hello ${fe.name || ""},
 
@@ -126,10 +151,14 @@ Pariskq Operations Team
       },
       `FE_ACTION_${type}`
     );
+
+    console.log("[FE TOKEN EMAIL] SUCCESS");
+
   } catch (err) {
-    console.error("[sendFETokenEmail]", err.message);
+    console.error("[FE TOKEN EMAIL ERROR]", err);
   }
 }
+
 
 /* =====================================================
    3️⃣ CLIENT RESOLUTION EMAIL (IDEMPOTENT)
