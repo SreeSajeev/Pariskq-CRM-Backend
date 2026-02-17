@@ -1,7 +1,6 @@
 // src/routes/tickets.js
 import express from "express"
 import { supabase } from "../supabaseClient.js"
-import { assertValidTransition } from "../services/ticketStateMachine.js"
 import { createActionToken } from "../services/tokenService.js"
 import { sendFETokenEmail } from "../services/emailService.js"
 import { handleClientResolutionNotification } from "../services/clientNotificationService.js"
@@ -22,7 +21,7 @@ router.get("/", async (_req, res) => {
 })
 
 /* ======================================================
-   ASSIGN FIELD EXECUTIVE  ✅ FIXED
+   ASSIGN FIELD EXECUTIVE
 ====================================================== */
 router.post("/:id/assign", async (req, res) => {
   const ticketId = req.params.id
@@ -33,7 +32,7 @@ router.post("/:id/assign", async (req, res) => {
   }
 
   try {
-    // 1️⃣ Fetch ticket
+    // 1. Fetch ticket
     const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
       .select("id, status, ticket_number")
@@ -44,9 +43,11 @@ router.post("/:id/assign", async (req, res) => {
       return res.status(404).json({ error: "Ticket not found" })
     }
 
-    assertValidTransition(ticket.status, "ASSIGNED")
+    if (ticket.status !== "OPEN") {
+      return res.status(400).json({ error: "Ticket not in OPEN state" })
+    }
 
-    // 2️⃣ Prevent double assignment
+    // 2. Prevent duplicate assignment
     const { data: existing } = await supabase
       .from("ticket_assignments")
       .select("id")
@@ -57,7 +58,7 @@ router.post("/:id/assign", async (req, res) => {
       return res.status(409).json({ error: "Ticket already assigned" })
     }
 
-    // 3️⃣ Insert assignment (NO RPC)
+    // 3. Insert assignment
     const { data: assignment, error: insertError } = await supabase
       .from("ticket_assignments")
       .insert({
@@ -67,9 +68,11 @@ router.post("/:id/assign", async (req, res) => {
       .select()
       .single()
 
-    if (insertError) throw insertError
+    if (insertError) {
+      return res.status(500).json({ error: insertError.message })
+    }
 
-    // 4️⃣ Update ticket pointer + status
+    // 4. Update ticket status + pointer
     const { error: updateError } = await supabase
       .from("tickets")
       .update({
@@ -78,57 +81,61 @@ router.post("/:id/assign", async (req, res) => {
       })
       .eq("id", ticketId)
 
-    if (updateError) throw updateError
-
-    // 5️⃣ Create ON_SITE token if not exists
-    const { data: existingToken } = await supabase
-      .from("fe_action_tokens")
-      .select("id")
-      .eq("ticket_id", ticketId)
-      .eq("action_type", "ON_SITE")
-      .maybeSingle()
-
-    if (!existingToken) {
-      const token = await createActionToken({
-        ticketId,
-        feId,
-        actionType: "ON_SITE",
-      })
-
-      sendFETokenEmail({
-        feId,
-        ticketNumber: ticket.ticket_number,
-        token,
-        type: "ON_SITE",
-      }).catch(console.error)
+    if (updateError) {
+      return res.status(500).json({ error: updateError.message })
     }
+
+    // 5. Create ON_SITE token
+    const token = await createActionToken({
+      ticketId,
+      feId,
+      actionType: "ON_SITE",
+    })
+
+    // 6. Send email (non-blocking)
+    sendFETokenEmail({
+      feId,
+      ticketNumber: ticket.ticket_number,
+      token,
+      type: "ON_SITE",
+    }).catch(console.error)
 
     return res.json({ success: true })
   } catch (err) {
-    return res.status(400).json({ error: err.message })
+    return res.status(500).json({ error: err.message })
   }
 })
 
 /* ======================================================
-   STAFF VERIFY ON-SITE
+   STAFF VERIFY ON-SITE (GENERATE RESOLUTION TOKEN)
 ====================================================== */
 router.post("/:id/on-site-token", async (req, res) => {
   const ticketId = req.params.id
 
   try {
-    const { data: ticket } = await supabase
+    const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
       .select("status, ticket_number")
       .eq("id", ticketId)
       .single()
 
-    assertValidTransition(ticket.status, "ON_SITE")
+    if (ticketError || !ticket) {
+      return res.status(404).json({ error: "Ticket not found" })
+    }
 
-    const { data: assignment } = await supabase
+    if (ticket.status !== "ASSIGNED" && ticket.status !== "ON_SITE") {
+      return res.status(400).json({ error: "Invalid state for ON_SITE verification" })
+    }
+
+    const { data: assignment, error: assignError } = await supabase
       .from("ticket_assignments")
       .select("fe_id")
       .eq("ticket_id", ticketId)
       .single()
+
+    if (assignError || !assignment) {
+      return res.status(400).json({ error: "Assignment not found" })
+    }
 
     // Mark ON_SITE token used
     await supabase
@@ -137,30 +144,21 @@ router.post("/:id/on-site-token", async (req, res) => {
       .eq("ticket_id", ticketId)
       .eq("action_type", "ON_SITE")
 
-    // Generate RESOLUTION token if not exists
-    const { data: existingResolution } = await supabase
-      .from("fe_action_tokens")
-      .select("id")
-      .eq("ticket_id", ticketId)
-      .eq("action_type", "RESOLUTION")
-      .maybeSingle()
+    // Generate RESOLUTION token
+    const resolutionToken = await createActionToken({
+      ticketId,
+      feId: assignment.fe_id,
+      actionType: "RESOLUTION",
+    })
 
-    if (!existingResolution) {
-      const token = await createActionToken({
-        ticketId,
-        feId: assignment.fe_id,
-        actionType: "RESOLUTION",
-      })
+    sendFETokenEmail({
+      feId: assignment.fe_id,
+      ticketNumber: ticket.ticket_number,
+      token: resolutionToken,
+      type: "RESOLUTION",
+    }).catch(console.error)
 
-      sendFETokenEmail({
-        feId: assignment.fe_id,
-        ticketNumber: ticket.ticket_number,
-        token,
-        type: "RESOLUTION",
-      }).catch(console.error)
-    }
-
-    // Move ticket forward
+    // Move ticket to pending verification
     await supabase
       .from("tickets")
       .update({ status: "RESOLVED_PENDING_VERIFICATION" })
@@ -168,7 +166,7 @@ router.post("/:id/on-site-token", async (req, res) => {
 
     return res.json({ success: true })
   } catch (err) {
-    return res.status(400).json({ error: err.message })
+    return res.status(500).json({ error: err.message })
   }
 })
 
@@ -179,13 +177,19 @@ router.post("/:id/close", async (req, res) => {
   const ticketId = req.params.id
 
   try {
-    const { data: ticket } = await supabase
+    const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
-      .select("status, opened_by_email, ticket_number")
+      .select("status")
       .eq("id", ticketId)
       .single()
 
-    assertValidTransition(ticket.status, "RESOLVED")
+    if (ticketError || !ticket) {
+      return res.status(404).json({ error: "Ticket not found" })
+    }
+
+    if (ticket.status !== "RESOLVED_PENDING_VERIFICATION") {
+      return res.status(400).json({ error: "Ticket not ready to close" })
+    }
 
     await supabase
       .from("tickets")
@@ -199,7 +203,7 @@ router.post("/:id/close", async (req, res) => {
 
     return res.json({ success: true })
   } catch (err) {
-    return res.status(400).json({ error: err.message })
+    return res.status(500).json({ error: err.message })
   }
 })
 
