@@ -1,5 +1,5 @@
 // src/controllers/proofController.js
-// Backend-authoritative FE proof upload + token consumption
+// Backend-authoritative FE proof upload + lifecycle enforcement
 
 import { supabase } from "../supabaseClient.js";
 
@@ -28,7 +28,9 @@ export async function uploadFeProof(req, res) {
       .single();
 
     if (tokenError || !actionToken) {
-      return res.status(404).json({ error: "Invalid or expired token" });
+      return res.status(404).json({
+        error: "Invalid or expired token",
+      });
     }
 
     /* =====================================================
@@ -41,7 +43,9 @@ export async function uploadFeProof(req, res) {
       .single();
 
     if (ticketError || !ticket) {
-      return res.status(404).json({ error: "Ticket not found" });
+      return res.status(404).json({
+        error: "Ticket not found",
+      });
     }
 
     /* =====================================================
@@ -66,7 +70,41 @@ export async function uploadFeProof(req, res) {
     }
 
     /* =====================================================
-       4️⃣ ATOMIC TOKEN CONSUMPTION (FIRST!)
+       4️⃣ STORE PROOF (AUDITABLE)
+    ===================================================== */
+    const { error: commentError } = await supabase
+      .from("ticket_comments")
+      .insert({
+        ticket_id: ticket.id,
+        source: "FE",
+        author_id: actionToken.fe_id,
+        body: `${actionToken.action_type} proof uploaded`,
+        attachments,
+      });
+
+    if (commentError) {
+      throw commentError;
+    }
+
+    /* =====================================================
+       5️⃣ TRANSITION TICKET STATE
+    ===================================================== */
+    const nextStatus =
+      actionToken.action_type === "ON_SITE"
+        ? "ON_SITE"
+        : "RESOLVED_PENDING_VERIFICATION";
+
+    const { error: statusError } = await supabase
+      .from("tickets")
+      .update({ status: nextStatus })
+      .eq("id", ticket.id);
+
+    if (statusError) {
+      throw statusError;
+    }
+
+    /* =====================================================
+       6️⃣ ATOMIC TOKEN CONSUMPTION (LAST)
     ===================================================== */
     const { data: consumed, error: consumeError } = await supabase
       .from("fe_action_tokens")
@@ -85,46 +123,14 @@ export async function uploadFeProof(req, res) {
       });
     }
 
-    /* =====================================================
-       5️⃣ STORE PROOF (ONLY AFTER CONSUMPTION)
-    ===================================================== */
-    const { error: commentError } = await supabase
-      .from("ticket_comments")
-      .insert({
-        ticket_id: ticket.id,
-        source: "FE",
-        author_id: actionToken.fe_id,
-        body: `${actionToken.action_type} proof uploaded`,
-        attachments,
-      });
-
-    if (commentError) {
-      throw commentError;
-    }
-
-    /* =====================================================
-       6️⃣ TRANSITION TICKET STATE
-    ===================================================== */
-    const nextStatus =
-      actionToken.action_type === "ON_SITE"
-        ? "ON_SITE"
-        : "RESOLVED_PENDING_VERIFICATION";
-
-    const { error: statusError } = await supabase
-      .from("tickets")
-      .update({ status: nextStatus })
-      .eq("id", ticket.id);
-
-    if (statusError) {
-      throw statusError;
-    }
-
     return res.json({
       success: true,
       nextStatus,
     });
   } catch (err) {
     console.error("[uploadFeProof]", err.message);
-    return res.status(500).json({ error: "Proof upload failed" });
+    return res.status(500).json({
+      error: "Proof upload failed",
+    });
   }
 }

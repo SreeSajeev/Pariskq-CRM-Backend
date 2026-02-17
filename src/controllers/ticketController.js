@@ -1,5 +1,5 @@
 
-//// src/controllers/ticketController.js
+// src/controllers/ticketController.js
 // Backend-authoritative, demo-safe lifecycle controller
 
 import { supabase } from "../supabaseClient.js";
@@ -85,10 +85,12 @@ export async function generateOnSiteToken(req, res) {
       actionType: "ON_SITE",
     });
 
-    await supabase
+    const { error: updateError } = await supabase
       .from("tickets")
       .update({ status: "EN_ROUTE" })
       .eq("id", ticketId);
+
+    if (updateError) throw updateError;
 
     await sendFETokenEmail({
       feId: assignment.fe_id,
@@ -110,19 +112,19 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
   try {
     const ticketId = req.params.id;
 
-    const { data: ticket } = await supabase
+    const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
       .select("status, ticket_number")
       .eq("id", ticketId)
       .single();
 
-    if (!ticket) {
+    if (ticketError || !ticket) {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
     assertValidTransition(ticket.status, "ON_SITE");
 
-    /* 🔒 NEW: ENSURE ON_SITE PROOF EXISTS */
+    /* 🔒 Ensure ON_SITE proof exists */
     const { data: onsiteProof } = await supabase
       .from("ticket_comments")
       .select("id")
@@ -147,8 +149,8 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
       return res.status(400).json({ error: "FE not assigned" });
     }
 
-    /* 🔐 Consume ON_SITE token */
-    const { data: consumed } = await supabase
+    /* 🔐 Consume ON_SITE token (single-use) */
+    const { data: consumed, error: consumeError } = await supabase
       .from("fe_action_tokens")
       .update({ used: true })
       .eq("ticket_id", ticketId)
@@ -157,12 +159,15 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
       .select("id")
       .limit(1);
 
+    if (consumeError) throw consumeError;
+
     if (!consumed || consumed.length === 0) {
       return res.status(400).json({
         error: "ON_SITE token already consumed or missing",
       });
     }
 
+    /* 🔄 Issue RESOLUTION token */
     const token = await createActionToken({
       ticketId,
       feId: assignment.fe_id,
@@ -189,19 +194,19 @@ export async function verifyAndCloseTicket(req, res) {
   try {
     const ticketId = req.params.id;
 
-    const { data: ticket } = await supabase
+    const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
       .select("status, opened_by_email, ticket_number")
       .eq("id", ticketId)
       .single();
 
-    if (!ticket) {
+    if (ticketError || !ticket) {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
     assertValidTransition(ticket.status, "RESOLVED");
 
-    /* 🔒 NEW: ENSURE RESOLUTION PROOF EXISTS */
+    /* 🔒 Ensure RESOLUTION proof exists */
     const { data: resolutionProof } = await supabase
       .from("ticket_comments")
       .select("id")
@@ -216,13 +221,15 @@ export async function verifyAndCloseTicket(req, res) {
       });
     }
 
-    await supabase
+    const { error: updateError } = await supabase
       .from("tickets")
       .update({
         status: "RESOLVED",
         resolved_at: new Date().toISOString(),
       })
       .eq("id", ticketId);
+
+    if (updateError) throw updateError;
 
     await handleClientResolutionNotification({
       toEmail: ticket.opened_by_email,
