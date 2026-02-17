@@ -17,27 +17,37 @@ export async function assignFieldExecutive(req, res) {
     const ticketId = req.params.id;
     const { feId } = req.body;
 
-    const { data: ticket } = await supabase
+    const { data: ticket, error } = await supabase
       .from("tickets")
       .select("status")
       .eq("id", ticketId)
       .single();
 
-    if (!ticket) {
+    if (error || !ticket) {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
     assertValidTransition(ticket.status, "ASSIGNED");
 
-    await supabase.from("ticket_assignments").insert({
-      ticket_id: ticketId,
-      fe_id: feId,
-    });
+    const { error: insertError } = await supabase
+      .from("ticket_assignments")
+      .insert({
+        ticket_id: ticketId,
+        fe_id: feId,
+      });
 
-    await supabase
+    if (insertError) {
+      throw insertError;
+    }
+
+    const { error: updateError } = await supabase
       .from("tickets")
       .update({ status: "ASSIGNED" })
       .eq("id", ticketId);
+
+    if (updateError) {
+      throw updateError;
+    }
 
     return res.json({ success: true });
   } catch (err) {
@@ -52,23 +62,29 @@ export async function generateOnSiteToken(req, res) {
   try {
     const ticketId = req.params.id;
 
-    const { data: assignment } = await supabase
+    const { data: assignment, error: assignmentError } = await supabase
       .from("ticket_assignments")
       .select("fe_id")
       .eq("ticket_id", ticketId)
       .single();
 
-    if (!assignment) {
+    if (assignmentError || !assignment) {
       return res.status(400).json({ error: "FE not assigned" });
     }
 
-    const { data: ticket } = await supabase
+    const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
       .select("status, ticket_number")
       .eq("id", ticketId)
       .single();
 
+    if (ticketError || !ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
     assertValidTransition(ticket.status, "EN_ROUTE");
+
+    const nowISO = new Date().toISOString();
 
     const { data: existingToken } = await supabase
       .from("fe_action_tokens")
@@ -76,7 +92,7 @@ export async function generateOnSiteToken(req, res) {
       .eq("ticket_id", ticketId)
       .eq("action_type", "ON_SITE")
       .eq("used", false)
-      .gt("expires_at", new Date().toISOString())
+      .gt("expires_at", nowISO)
       .maybeSingle();
 
     if (existingToken) {
@@ -89,10 +105,14 @@ export async function generateOnSiteToken(req, res) {
       actionType: "ON_SITE",
     });
 
-    await supabase
+    const { error: updateError } = await supabase
       .from("tickets")
       .update({ status: "EN_ROUTE" })
       .eq("id", ticketId);
+
+    if (updateError) {
+      throw updateError;
+    }
 
     await sendFETokenEmail({
       feId: assignment.fe_id,
@@ -114,41 +134,49 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
   try {
     const ticketId = req.params.id;
 
-    const { data: ticket } = await supabase
+    const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
       .select("status, ticket_number")
       .eq("id", ticketId)
       .single();
 
-    if (!ticket) {
+    if (ticketError || !ticket) {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
     assertValidTransition(ticket.status, "ON_SITE");
 
-    const { data: assignment } = await supabase
+    const { data: assignment, error: assignmentError } = await supabase
       .from("ticket_assignments")
       .select("fe_id")
       .eq("ticket_id", ticketId)
       .single();
 
-    if (!assignment) {
+    if (assignmentError || !assignment) {
       return res.status(400).json({ error: "FE not assigned" });
     }
 
-    // Consume ON_SITE token (single-use, atomic)
-    const { data: consumed } = await supabase
+    // Consume ON_SITE token atomically
+    const { data: consumed, error: consumeError } = await supabase
       .from("fe_action_tokens")
       .update({ used: true })
       .eq("ticket_id", ticketId)
       .eq("action_type", "ON_SITE")
       .eq("used", false)
-      .limit(1)
-      .select("id");
+      .select("id")
+      .limit(1);
+
+    if (consumeError) {
+      throw consumeError;
+    }
 
     if (!consumed || consumed.length === 0) {
-      return res.status(400).json({ error: "ON_SITE token already consumed or missing" });
+      return res.status(400).json({
+        error: "ON_SITE token already consumed or missing",
+      });
     }
+
+    const nowISO = new Date().toISOString();
 
     const { data: existingResolution } = await supabase
       .from("fe_action_tokens")
@@ -156,11 +184,13 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
       .eq("ticket_id", ticketId)
       .eq("action_type", "RESOLUTION")
       .eq("used", false)
-      .gt("expires_at", new Date().toISOString())
+      .gt("expires_at", nowISO)
       .maybeSingle();
 
     if (existingResolution) {
-      return res.status(400).json({ error: "RESOLUTION token already active" });
+      return res.status(400).json({
+        error: "RESOLUTION token already active",
+      });
     }
 
     const token = await createActionToken({
@@ -169,10 +199,14 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
       actionType: "RESOLUTION",
     });
 
-    await supabase
+    const { error: updateError } = await supabase
       .from("tickets")
       .update({ status: "ON_SITE" })
       .eq("id", ticketId);
+
+    if (updateError) {
+      throw updateError;
+    }
 
     await sendFETokenEmail({
       feId: assignment.fe_id,
@@ -194,19 +228,18 @@ export async function verifyAndCloseTicket(req, res) {
   try {
     const ticketId = req.params.id;
 
-    const { data: ticket } = await supabase
+    const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
       .select("status, opened_by_email, ticket_number")
       .eq("id", ticketId)
       .single();
 
-    if (!ticket) {
+    if (ticketError || !ticket) {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
     assertValidTransition(ticket.status, "RESOLVED");
 
-    // Ensure RESOLUTION token has been consumed
     const { data: pendingResolution } = await supabase
       .from("fe_action_tokens")
       .select("id")
@@ -221,13 +254,17 @@ export async function verifyAndCloseTicket(req, res) {
       });
     }
 
-    await supabase
+    const { error: updateError } = await supabase
       .from("tickets")
       .update({
         status: "RESOLVED",
         resolved_at: new Date().toISOString(),
       })
       .eq("id", ticketId);
+
+    if (updateError) {
+      throw updateError;
+    }
 
     await handleClientResolutionNotification({
       toEmail: ticket.opened_by_email,

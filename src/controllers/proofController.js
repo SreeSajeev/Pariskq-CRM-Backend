@@ -6,19 +6,6 @@ import { supabase } from "../supabaseClient.js";
 /* =====================================================
    UPLOAD FE PROOF (ON_SITE or RESOLUTION)
 ===================================================== */
-/*
-  POST /fe/proof
-
-  Body:
-  - token (uuid from fe_action_tokens)
-  - attachments (json | optional metadata)
-
-  This endpoint:
-  - validates token
-  - enforces lifecycle order
-  - consumes token
-  - transitions ticket status
-*/
 export async function uploadFeProof(req, res) {
   try {
     const { token, attachments = null } = req.body;
@@ -27,78 +14,110 @@ export async function uploadFeProof(req, res) {
       return res.status(400).json({ error: "Token required" });
     }
 
-    const now = new Date().toISOString();
+    const nowISO = new Date().toISOString();
 
-    // 🔐 Validate token
-    const { data: actionToken, error } = await supabase
+    /* =====================================================
+       1️⃣ VALIDATE TOKEN (UNUSED + UNEXPIRED)
+    ===================================================== */
+    const { data: actionToken, error: tokenError } = await supabase
       .from("fe_action_tokens")
-      .select("id, ticket_id, fe_id, action_type, expires_at, used")
+      .select("id, ticket_id, fe_id, action_type, expires_at")
       .eq("id", token)
+      .eq("used", false)
+      .gt("expires_at", nowISO)
       .single();
 
-    if (error || !actionToken) {
-      return res.status(404).json({ error: "Invalid token" });
+    if (tokenError || !actionToken) {
+      return res.status(404).json({ error: "Invalid or expired token" });
     }
 
-    if (actionToken.used) {
-      return res.status(410).json({ error: "Token already used" });
-    }
-
-    if (actionToken.expires_at <= now) {
-      return res.status(410).json({ error: "Token expired" });
-    }
-
-    // 🔎 Fetch ticket
-    const { data: ticket } = await supabase
+    /* =====================================================
+       2️⃣ FETCH TICKET
+    ===================================================== */
+    const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
       .select("id, status")
       .eq("id", actionToken.ticket_id)
       .single();
 
-    if (!ticket) {
+    if (ticketError || !ticket) {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
-    // 🔒 Enforce lifecycle order
+    /* =====================================================
+       3️⃣ ENFORCE LIFECYCLE ORDER
+    ===================================================== */
     if (
       actionToken.action_type === "ON_SITE" &&
       ticket.status !== "EN_ROUTE"
     ) {
-      return res.status(400).json({ error: "Invalid ticket state for ON_SITE proof" });
+      return res.status(400).json({
+        error: "Invalid ticket state for ON_SITE proof",
+      });
     }
 
     if (
       actionToken.action_type === "RESOLUTION" &&
       ticket.status !== "ON_SITE"
     ) {
-      return res.status(400).json({ error: "Invalid ticket state for RESOLUTION proof" });
+      return res.status(400).json({
+        error: "Invalid ticket state for RESOLUTION proof",
+      });
     }
 
-    // 📝 Store proof as ticket comment (auditable)
-    await supabase.from("ticket_comments").insert({
-      ticket_id: ticket.id,
-      source: "FE",
-      author_id: actionToken.fe_id,
-      body: `${actionToken.action_type} proof uploaded`,
-      attachments,
-    });
-
-    // 🔐 Consume token (atomic)
-    await supabase
+    /* =====================================================
+       4️⃣ ATOMIC TOKEN CONSUMPTION (FIRST!)
+    ===================================================== */
+    const { data: consumed, error: consumeError } = await supabase
       .from("fe_action_tokens")
       .update({ used: true })
-      .eq("id", actionToken.id);
+      .eq("id", actionToken.id)
+      .eq("used", false)
+      .select("id");
 
-    // 🔁 Transition ticket state
+    if (consumeError) {
+      throw consumeError;
+    }
+
+    if (!consumed || consumed.length === 0) {
+      return res.status(409).json({
+        error: "Token already consumed",
+      });
+    }
+
+    /* =====================================================
+       5️⃣ STORE PROOF (ONLY AFTER CONSUMPTION)
+    ===================================================== */
+    const { error: commentError } = await supabase
+      .from("ticket_comments")
+      .insert({
+        ticket_id: ticket.id,
+        source: "FE",
+        author_id: actionToken.fe_id,
+        body: `${actionToken.action_type} proof uploaded`,
+        attachments,
+      });
+
+    if (commentError) {
+      throw commentError;
+    }
+
+    /* =====================================================
+       6️⃣ TRANSITION TICKET STATE
+    ===================================================== */
     const nextStatus =
       actionToken.action_type === "ON_SITE"
         ? "ON_SITE"
         : "RESOLVED_PENDING_VERIFICATION";
 
-    await supabase
+    const { error: statusError } = await supabase
       .from("tickets")
       .update({ status: nextStatus })
       .eq("id", ticket.id);
+
+    if (statusError) {
+      throw statusError;
+    }
 
     return res.json({
       success: true,

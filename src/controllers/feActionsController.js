@@ -14,7 +14,7 @@ export async function validateFeActionToken(req, res) {
       return res.status(400).json({ error: "Token missing" });
     }
 
-    const now = new Date().toISOString();
+    const nowISO = new Date().toISOString();
 
     const { data: actionToken, error } = await supabase
       .from("fe_action_tokens")
@@ -44,8 +44,36 @@ export async function validateFeActionToken(req, res) {
       return res.status(410).json({ error: "Token already used" });
     }
 
-    if (actionToken.expires_at <= now) {
+    if (actionToken.expires_at <= nowISO) {
       return res.status(410).json({ error: "Token expired" });
+    }
+
+    if (!actionToken.tickets) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    /* =====================================================
+       🔒 ENFORCE LIFECYCLE STATE ALIGNMENT
+    ===================================================== */
+
+    const ticketStatus = actionToken.tickets.status;
+
+    if (
+      actionToken.action_type === "ON_SITE" &&
+      ticketStatus !== "EN_ROUTE"
+    ) {
+      return res.status(400).json({
+        error: "Ticket not in EN_ROUTE state",
+      });
+    }
+
+    if (
+      actionToken.action_type === "RESOLUTION" &&
+      ticketStatus !== "ON_SITE"
+    ) {
+      return res.status(400).json({
+        error: "Ticket not in ON_SITE state",
+      });
     }
 
     return res.json({
@@ -53,7 +81,8 @@ export async function validateFeActionToken(req, res) {
       feId: actionToken.fe_id,
       actionType: actionToken.action_type,
       ticketNumber: actionToken.tickets.ticket_number,
-      ticketStatus: actionToken.tickets.status,
+      ticketStatus,
+      expiresAt: actionToken.expires_at,
     });
   } catch (err) {
     console.error("[validateFeActionToken]", err.message);

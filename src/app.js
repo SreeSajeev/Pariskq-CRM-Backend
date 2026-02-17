@@ -10,8 +10,14 @@ import { runAutoTicketWorker } from './workers/autoTicketWorker.js';
 // ✅ Email services (existing)
 import { sendResolutionEmail } from './services/emailService.js';
 
-// ✅ CRITICAL: tickets router (FIX)
+// ✅ Existing routers
 import ticketsRouter from './routes/tickets.js';
+
+// 🔐 NEW: FE token validation router
+import feActionsRouter from './routes/feActions.js';
+
+// 🔐 NEW: FE proof upload controller
+import { uploadFeProof } from './controllers/proofController.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -27,8 +33,14 @@ app.use(bodyParser.urlencoded({ extended: true }));
    ROUTES
 ================================ */
 
-// ✅ CRITICAL: mount tickets router (FIX)
+// ✅ Tickets (existing)
 app.use('/tickets', ticketsRouter);
+
+// 🔐 FE token validation (read-only lifecycle entry)
+app.use(feActionsRouter);
+
+// 📤 FE proof upload (authoritative lifecycle mutation)
+app.post('/fe/proof', uploadFeProof);
 
 /* ===============================
    HEALTH CHECK
@@ -40,7 +52,6 @@ app.get('/health', (_req, res) => {
 
 /* ===============================
    INTERNAL: TICKET RESOLVED HOOK
-   (NEW — does NOT affect existing flows)
 ================================ */
 
 app.post('/internal/ticket-resolved', async (req, res) => {
@@ -57,7 +68,6 @@ app.post('/internal/ticket-resolved', async (req, res) => {
       return res.status(400).json({ error: 'ticket_id missing' });
     }
 
-    // Fetch ticket directly — read-only operation
     const { data: ticket, error } = await supabase
       .from('tickets')
       .select('id, ticket_number, status, opened_by_email')
@@ -68,7 +78,6 @@ app.post('/internal/ticket-resolved', async (req, res) => {
       return res.status(200).json({ ignored: 'ticket not found' });
     }
 
-    // Safety guard — prevents accidental sends
     if (ticket.status !== 'RESOLVED') {
       return res.status(200).json({ ignored: 'status not resolved' });
     }
@@ -77,7 +86,6 @@ app.post('/internal/ticket-resolved', async (req, res) => {
       return res.status(200).json({ ignored: 'no opened_by_email' });
     }
 
-    // Idempotency check
     const { data: alreadySent } = await supabase
       .from('ticket_resolution_notifications')
       .select('ticket_id')
@@ -88,13 +96,11 @@ app.post('/internal/ticket-resolved', async (req, res) => {
       return res.status(200).json({ ignored: 'email already sent' });
     }
 
-    // Send resolution email
     await sendResolutionEmail({
       to: ticket.opened_by_email,
       ticketNumber: ticket.ticket_number,
     });
 
-    // Mark as sent (idempotency)
     await supabase
       .from('ticket_resolution_notifications')
       .insert({ ticket_id: ticket.id });
@@ -108,13 +114,11 @@ app.post('/internal/ticket-resolved', async (req, res) => {
 
 /* ===============================
    POSTMARK INBOUND WEBHOOK
-   (UNCHANGED)
 ================================ */
 
 app.post('/postmark-webhook', async (req, res) => {
   const email = req.body;
 
-  // Always ACK quickly unless payload is clearly invalid
   if (!email || !email.MessageID) {
     console.warn('[POSTMARK] Invalid payload received');
     return res.status(400).send('Invalid payload');
@@ -127,7 +131,7 @@ app.post('/postmark-webhook', async (req, res) => {
     to_email: email.ToFull?.Email || email.To || null,
     subject: email.Subject || null,
     received_at: email.ReceivedAt || new Date().toISOString(),
-    payload: email, // assumes jsonb column
+    payload: email,
     processing_status: 'PENDING',
     created_at: new Date().toISOString(),
   };
@@ -138,26 +142,19 @@ app.post('/postmark-webhook', async (req, res) => {
       .insert(insertPayload);
 
     if (error) {
-      console.error(
-        '[POSTMARK] Supabase insert failed',
-        JSON.stringify(error, null, 2)
-      );
+      console.error('[POSTMARK] Supabase insert failed', error);
       return res.status(500).send('Failed to store email');
     }
 
     return res.status(200).send('Email received');
   } catch (err) {
-    console.error('[POSTMARK] Webhook exception', {
-      message: err.message,
-      stack: err.stack,
-    });
+    console.error('[POSTMARK] Webhook exception', err);
     return res.status(500).send('Internal server error');
   }
 });
 
 /* ===============================
    WORKER BOOTSTRAP
-   (UNCHANGED)
 ================================ */
 
 async function startWorkerLoop() {
@@ -166,9 +163,7 @@ async function startWorkerLoop() {
   try {
     await runAutoTicketWorker();
   } catch (err) {
-    console.error('[WORKER] Startup run failed', {
-      message: err.message,
-    });
+    console.error('[WORKER] Startup run failed', err);
   }
 
   setInterval(async () => {
@@ -177,9 +172,7 @@ async function startWorkerLoop() {
     try {
       await runAutoTicketWorker();
     } catch (err) {
-      console.error('[WORKER] Interval run failed', {
-        message: err.message,
-      });
+      console.error('[WORKER] Interval run failed', err);
     }
   }, 60_000);
 }
