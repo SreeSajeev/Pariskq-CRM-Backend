@@ -9,61 +9,82 @@ export async function uploadFeProof(req, res) {
       return res.status(400).json({ error: "Token required" });
     }
 
-    // 🔥 DEMO MODE: Only validate existence
-    const { data: actionToken, error: tokenError } = await supabase
-      .from("fe_action_tokens")
-      .select("*")
-      .eq("id", token)
-      .single();
+    /* =====================================================
+       🔥 DEMO MODE — ALWAYS ACCEPT TOKEN IF EXISTS
+    ===================================================== */
 
-    if (tokenError || !actionToken) {
+    const { data: actionToken } = await supabase
+      .from("fe_action_tokens")
+      .select("id, ticket_id, fe_id, action_type")
+      .eq("id", token)
+      .maybeSingle();
+
+    if (!actionToken) {
       return res.status(404).json({ error: "Invalid token" });
     }
 
     const ticketId = actionToken.ticket_id;
 
-    // 🔥 Always store proof
-    await supabase.from("ticket_comments").insert({
-      ticket_id: ticketId,
-      source: "FE",
-      author_id: actionToken.fe_id,
-      body: `${actionToken.action_type} proof uploaded`,
-      attachments,
-      created_at: new Date().toISOString(),
-    });
+    /* =====================================================
+       🔥 ALWAYS INSERT PROOF COMMENT
+    ===================================================== */
 
-    // 🔥 Always consume token
+    const { error: commentError } = await supabase
+      .from("ticket_comments")
+      .insert({
+        ticket_id: ticketId,
+        source: "FE",
+        author_id: actionToken.fe_id,
+        body: `Demo ${actionToken.action_type} proof uploaded`,
+        attachments,
+        created_at: new Date().toISOString(),
+      });
+
+    if (commentError) {
+      console.error("Comment Insert Error:", commentError);
+    }
+
+    /* =====================================================
+       🔥 FORCE STATUS TRANSITION
+       ON_SITE → ON_SITE
+       RESOLUTION → RESOLVED_PENDING_VERIFICATION
+    ===================================================== */
+
+    let nextStatus =
+      actionToken.action_type === "ON_SITE"
+        ? "ON_SITE"
+        : "RESOLVED_PENDING_VERIFICATION";
+
+    const { error: updateError } = await supabase
+      .from("tickets")
+      .update({
+        status: nextStatus,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", ticketId);
+
+    if (updateError) {
+      console.error("Status Update Error:", updateError);
+    }
+
+    /* =====================================================
+       🔥 ALWAYS MARK TOKEN USED (IGNORE STATE)
+    ===================================================== */
+
     await supabase
       .from("fe_action_tokens")
       .update({ used: true })
       .eq("id", token);
 
-    let nextStatus;
-
-    if (actionToken.action_type === "ON_SITE") {
-      nextStatus = "ON_SITE";
-
-      await supabase
-        .from("tickets")
-        .update({ status: nextStatus })
-        .eq("id", ticketId);
-
-    } else {
-      nextStatus = "RESOLVED_PENDING_VERIFICATION";
-
-      await supabase
-        .from("tickets")
-        .update({ status: nextStatus })
-        .eq("id", ticketId);
-    }
-
     return res.json({
       success: true,
       nextStatus,
+      demo: true,
     });
-
   } catch (err) {
-    console.error("[uploadFeProof]", err);
-    return res.status(500).json({ error: "Proof upload failed" });
+    console.error("[DEMO uploadFeProof ERROR]", err);
+    return res.status(500).json({
+      error: "Demo proof upload failed",
+    });
   }
 }

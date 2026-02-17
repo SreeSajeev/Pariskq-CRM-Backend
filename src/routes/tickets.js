@@ -22,7 +22,7 @@ router.get("/", async (_req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    return res.json(data);
+    return res.json(data || []);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
@@ -52,7 +52,7 @@ router.post("/:id/assign", async (req, res) => {
     }
 
     // Insert assignment (ignore duplicates for demo)
-    const { data: assignment } = await supabase
+    const { data: assignment, error: assignmentError } = await supabase
       .from("ticket_assignments")
       .insert({
         ticket_id: ticketId,
@@ -60,6 +60,10 @@ router.post("/:id/assign", async (req, res) => {
       })
       .select()
       .single();
+
+    if (assignmentError) {
+      console.error("Assignment insert error:", assignmentError);
+    }
 
     // Update ticket state
     await supabase
@@ -77,7 +81,7 @@ router.post("/:id/assign", async (req, res) => {
       actionType: "ON_SITE",
     });
 
-    // Send email (non-blocking)
+    // Send email (non-blocking, demo-safe)
     sendFETokenEmail({
       feId,
       ticketNumber: ticket.ticket_number,
@@ -87,7 +91,7 @@ router.post("/:id/assign", async (req, res) => {
 
     return res.json({
       success: true,
-      token, // 🔥 visible for demo
+      token,
     });
 
   } catch (err) {
@@ -139,7 +143,7 @@ router.post("/:id/on-site-token", async (req, res) => {
 
     return res.json({
       success: true,
-      resolutionToken, // 🔥 visible for demo
+      resolutionToken,
     });
 
   } catch (err) {
