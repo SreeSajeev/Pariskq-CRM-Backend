@@ -9,7 +9,6 @@ import { supabase } from "./supabaseClient.js";
 import { runAutoTicketWorker } from "./workers/autoTicketWorker.js";
 
 import { sendResolutionEmail } from "./services/emailService.js";
-
 import ticketsRouter from "./routes/tickets.js";
 import feActionsRouter from "./routes/feActions.js";
 import { uploadFeProof } from "./controllers/proofController.js";
@@ -21,7 +20,7 @@ const PORT = process.env.PORT || 3000;
    GLOBAL MIDDLEWARE
 ====================================================== */
 
-// ✅ CORS FIX (CRITICAL)
+// ✅ Proper CORS configuration (Express 5 safe)
 app.use(
   cors({
     origin: [
@@ -34,9 +33,7 @@ app.use(
   })
 );
 
-// Handle preflight requests
-app.options("*", cors());
-
+// Body parsing
 app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ extended: true }));
 
