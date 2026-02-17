@@ -1,211 +1,175 @@
 // src/routes/tickets.js
-import express from "express"
-import { supabase } from "../supabaseClient.js"
-import { createActionToken } from "../services/tokenService.js"
-import { sendFETokenEmail } from "../services/emailService.js"
-import { handleClientResolutionNotification } from "../services/clientNotificationService.js"
 
+import express from "express";
+import { supabase } from "../supabaseClient.js";
+import { createActionToken } from "../services/tokenService.js";
+import { sendFETokenEmail } from "../services/emailService.js";
+import { handleClientResolutionNotification } from "../services/clientNotificationService.js";
 
-const router = express.Router()
+const router = express.Router();
 
 /* ======================================================
    READ TICKETS
 ====================================================== */
 router.get("/", async (_req, res) => {
-  const { data, error } = await supabase
-    .from("tickets")
-    .select("*")
-    .order("created_at", { ascending: false })
+  try {
+    const { data, error } = await supabase
+      .from("tickets")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-  if (error) return res.status(500).json({ error: error.message })
-  return res.json(data)
-})
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    return res.json(data);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 /* ======================================================
    ASSIGN FIELD EXECUTIVE
+   (Always generate ON_SITE token)
 ====================================================== */
 router.post("/:id/assign", async (req, res) => {
-  const ticketId = req.params.id
-  const { feId } = req.body
+  const ticketId = req.params.id;
+  const { feId } = req.body;
 
   if (!feId) {
-    return res.status(400).json({ error: "feId is required" })
+    return res.status(400).json({ error: "feId is required" });
   }
 
   try {
-    // 1. Fetch ticket
     const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
-      .select("id, status, ticket_number")
+      .select("id, ticket_number")
       .eq("id", ticketId)
-      .single()
+      .single();
 
     if (ticketError || !ticket) {
-      return res.status(404).json({ error: "Ticket not found" })
+      return res.status(404).json({ error: "Ticket not found" });
     }
 
-    if (ticket.status !== "OPEN") {
-      return res.status(400).json({ error: "Ticket not in OPEN state" })
-    }
-
-    // 2. Prevent duplicate assignment
-    const { data: existing } = await supabase
-      .from("ticket_assignments")
-      .select("id")
-      .eq("ticket_id", ticketId)
-      .maybeSingle()
-
-    if (existing) {
-      return res.status(409).json({ error: "Ticket already assigned" })
-    }
-
-    // 3. Insert assignment
-    const { data: assignment, error: insertError } = await supabase
+    // Insert assignment (ignore duplicates for demo)
+    const { data: assignment } = await supabase
       .from("ticket_assignments")
       .insert({
         ticket_id: ticketId,
         fe_id: feId,
       })
       .select()
-      .single()
+      .single();
 
-    if (insertError) {
-      return res.status(500).json({ error: insertError.message })
-    }
-
-    // 4. Update ticket status + pointer
-    const { error: updateError } = await supabase
+    // Update ticket state
+    await supabase
       .from("tickets")
       .update({
         status: "ASSIGNED",
-        current_assignment_id: assignment.id,
+        current_assignment_id: assignment?.id || null,
       })
-      .eq("id", ticketId)
+      .eq("id", ticketId);
 
-    if (updateError) {
-      return res.status(500).json({ error: updateError.message })
-    }
-
-    // 5. Create ON_SITE token
+    // Always create ON_SITE token
     const token = await createActionToken({
       ticketId,
       feId,
       actionType: "ON_SITE",
-    })
+    });
 
-    // 6. Send email (non-blocking)
+    // Send email (non-blocking)
     sendFETokenEmail({
       feId,
       ticketNumber: ticket.ticket_number,
       token,
       type: "ON_SITE",
-    }).catch(console.error)
+    }).catch(console.error);
 
-    return res.json({ success: true })
+    return res.json({
+      success: true,
+      token, // 🔥 visible for demo
+    });
+
   } catch (err) {
-    return res.status(500).json({ error: err.message })
+    return res.status(500).json({ error: err.message });
   }
-})
+});
 
 /* ======================================================
-   STAFF VERIFY ON-SITE (GENERATE RESOLUTION TOKEN)
+   STAFF VERIFY ON-SITE
+   (Generate RESOLUTION token)
 ====================================================== */
 router.post("/:id/on-site-token", async (req, res) => {
-  const ticketId = req.params.id
+  const ticketId = req.params.id;
 
   try {
-    const { data: ticket, error: ticketError } = await supabase
+    const { data: ticket } = await supabase
       .from("tickets")
-      .select("status, ticket_number")
+      .select("ticket_number")
       .eq("id", ticketId)
-      .single()
+      .single();
 
-    if (ticketError || !ticket) {
-      return res.status(404).json({ error: "Ticket not found" })
-    }
-
-    if (ticket.status !== "ASSIGNED" && ticket.status !== "ON_SITE") {
-      return res.status(400).json({ error: "Invalid state for ON_SITE verification" })
-    }
-
-    const { data: assignment, error: assignError } = await supabase
+    const { data: assignment } = await supabase
       .from("ticket_assignments")
       .select("fe_id")
       .eq("ticket_id", ticketId)
-      .single()
+      .single();
 
-    if (assignError || !assignment) {
-      return res.status(400).json({ error: "Assignment not found" })
+    if (!assignment) {
+      return res.status(400).json({ error: "Assignment missing" });
     }
 
-    // Mark ON_SITE token used
-    await supabase
-      .from("fe_action_tokens")
-      .update({ used: true })
-      .eq("ticket_id", ticketId)
-      .eq("action_type", "ON_SITE")
-
-    // Generate RESOLUTION token
     const resolutionToken = await createActionToken({
       ticketId,
       feId: assignment.fe_id,
       actionType: "RESOLUTION",
-    })
+    });
 
     sendFETokenEmail({
       feId: assignment.fe_id,
-      ticketNumber: ticket.ticket_number,
+      ticketNumber: ticket?.ticket_number || "DEMO",
       token: resolutionToken,
       type: "RESOLUTION",
-    }).catch(console.error)
+    }).catch(console.error);
 
-    // Move ticket to pending verification
     await supabase
       .from("tickets")
-      .update({ status: "RESOLVED_PENDING_VERIFICATION" })
-      .eq("id", ticketId)
+      .update({ status: "ON_SITE" })
+      .eq("id", ticketId);
 
-    return res.json({ success: true })
+    return res.json({
+      success: true,
+      resolutionToken, // 🔥 visible for demo
+    });
+
   } catch (err) {
-    return res.status(500).json({ error: err.message })
+    return res.status(500).json({ error: err.message });
   }
-})
+});
 
 /* ======================================================
-   STAFF FINAL VERIFY & CLOSE
+   STAFF FINAL CLOSE
+   (Always allow close for demo)
 ====================================================== */
 router.post("/:id/close", async (req, res) => {
-  const ticketId = req.params.id
+  const ticketId = req.params.id;
 
   try {
-    const { data: ticket, error: ticketError } = await supabase
-      .from("tickets")
-      .select("status")
-      .eq("id", ticketId)
-      .single()
-
-    if (ticketError || !ticket) {
-      return res.status(404).json({ error: "Ticket not found" })
-    }
-
-    if (ticket.status !== "RESOLVED_PENDING_VERIFICATION") {
-      return res.status(400).json({ error: "Ticket not ready to close" })
-    }
-
     await supabase
       .from("tickets")
       .update({
         status: "RESOLVED",
         resolved_at: new Date(),
       })
-      .eq("id", ticketId)
+      .eq("id", ticketId);
 
-    await handleClientResolutionNotification(ticketId)
+    await handleClientResolutionNotification(ticketId);
 
-    return res.json({ success: true })
+    return res.json({ success: true });
+
   } catch (err) {
-    return res.status(500).json({ error: err.message })
+    return res.status(500).json({ error: err.message });
   }
-})
+});
 
-export default router
+export default router;
