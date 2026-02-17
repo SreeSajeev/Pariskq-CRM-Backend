@@ -1,66 +1,40 @@
 // src/services/clientNotificationService.js
 
 import { supabase } from "../supabaseClient.js";
-import { sendClientClosureEmail } from "./emailService.js";
+import { sendClientResolutionEmail } from "./emailService.js";
 
-/**
- * Client Resolution Notification
- *
- * RULES:
- * - MUST NEVER block ticket closure
- * - MUST NEVER throw
- * - Logs failures for demo visibility
- * - Supports consolidated + single-ticket modes
- */
-export async function handleClientResolutionNotification(clientEmail) {
+export async function handleClientResolutionNotification(ticketId) {
   try {
-    if (!clientEmail) {
-      console.warn("[CLIENT_NOTIFY] Missing client email");
+    if (!ticketId) {
+      console.error("[CLIENT_NOTIFY] Missing ticketId");
       return;
     }
 
-    const oneWeekAgo = new Date();
-    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-
-    const { data: resolvedTickets, error } = await supabase
+    // Fetch ticket details
+    const { data: ticket, error } = await supabase
       .from("tickets")
-      .select("ticket_number, category")
-      .eq("opened_by_email", clientEmail)
-      .eq("status", "RESOLVED")
-      .gte("updated_at", oneWeekAgo.toISOString());
+      .select("opened_by_email, ticket_number")
+      .eq("id", ticketId)
+      .single();
 
-    if (error) {
-      console.error("[CLIENT_NOTIFY] Ticket query failed", error);
+    if (error || !ticket) {
+      console.error("[CLIENT_NOTIFY] Ticket fetch failed", error);
       return;
     }
 
-    if (!resolvedTickets || resolvedTickets.length === 0) {
+    if (!ticket.opened_by_email) {
+      console.error("[CLIENT_NOTIFY] No client email found");
       return;
     }
 
-    // 🔁 Consolidated notification
-    if (resolvedTickets.length >= 5) {
-      await sendClientClosureEmail({
-        toEmail: clientEmail,
-        consolidated: true,
-        tickets: resolvedTickets,
-      });
-      return;
-    }
+    console.log("📧 Sending resolution email to:", ticket.opened_by_email);
 
-    // 🔁 Individual notifications
-    for (const ticket of resolvedTickets) {
-      await sendClientClosureEmail({
-        toEmail: clientEmail,
-        consolidated: false,
-        ticket,
-      });
-    }
-  } catch (err) {
-    // 🔥 ABSOLUTE RULE: NEVER THROW
-    console.error("[CLIENT_NOTIFY] Resolution email failed", {
-      clientEmail,
-      message: err.message,
+    await sendClientResolutionEmail({
+      toEmail: ticket.opened_by_email,
+      ticketNumber: ticket.ticket_number,
     });
+
+  } catch (err) {
+    console.error("[CLIENT_NOTIFY ERROR]", err.message);
   }
 }

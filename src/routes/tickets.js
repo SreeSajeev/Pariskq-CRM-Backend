@@ -159,21 +159,34 @@ router.post("/:id/close", async (req, res) => {
   const ticketId = req.params.id;
 
   try {
-    await supabase
+    const { data: ticket, error } = await supabase
       .from("tickets")
       .update({
         status: "RESOLVED",
         resolved_at: new Date(),
       })
-      .eq("id", ticketId);
+      .eq("id", ticketId)
+      .select("ticket_number, opened_by_email")
+      .single();
 
-    await handleClientResolutionNotification(ticketId);
+    if (error || !ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    if (ticket.opened_by_email) {
+      await sendResolutionEmail({
+        toEmail: ticket.opened_by_email,
+        ticketNumber: ticket.ticket_number,
+      });
+    }
 
     return res.json({ success: true });
 
   } catch (err) {
+    console.error("[CLOSE ROUTE ERROR]", err);
     return res.status(500).json({ error: err.message });
   }
 });
+
 
 export default router;
