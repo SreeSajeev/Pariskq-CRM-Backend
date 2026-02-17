@@ -50,10 +50,12 @@ export async function uploadFeProof(req, res) {
 
     /* =====================================================
        3️⃣ ENFORCE LIFECYCLE ORDER
+       ALIGN WITH tickets.js:
+       OPEN → ASSIGNED → ON_SITE → RESOLVED_PENDING_VERIFICATION → RESOLVED
     ===================================================== */
     if (
       actionToken.action_type === "ON_SITE" &&
-      ticket.status !== "EN_ROUTE"
+      ticket.status !== "ASSIGNED"
     ) {
       return res.status(400).json({
         error: "Invalid ticket state for ON_SITE proof",
