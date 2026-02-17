@@ -1,5 +1,5 @@
 // src/controllers/feActionsController.js
-// Single authority for FE action token validation
+// Backend authoritative FE token validation
 
 import { supabase } from "../supabaseClient.js";
 
@@ -8,7 +8,7 @@ import { supabase } from "../supabaseClient.js";
 ===================================================== */
 export async function validateFeActionToken(req, res) {
   try {
-    const token = req.params.token;
+    const { token } = req.params;
 
     if (!token) {
       return res.status(400).json({ error: "Token missing" });
@@ -52,18 +52,19 @@ export async function validateFeActionToken(req, res) {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
-    /* =====================================================
-       🔒 ENFORCE LIFECYCLE STATE ALIGNMENT
-    ===================================================== */
-
     const ticketStatus = actionToken.tickets.status;
+
+    /* =====================================================
+       🔒 LIFECYCLE ALIGNMENT (MATCHES YOUR ACTUAL FLOW)
+       OPEN → ASSIGNED → ON_SITE → RESOLVED_PENDING_VERIFICATION
+    ===================================================== */
 
     if (
       actionToken.action_type === "ON_SITE" &&
-      ticketStatus !== "EN_ROUTE"
+      ticketStatus !== "ASSIGNED"
     ) {
       return res.status(400).json({
-        error: "Ticket not in EN_ROUTE state",
+        error: "Ticket not ready for ON_SITE action",
       });
     }
 
@@ -72,7 +73,7 @@ export async function validateFeActionToken(req, res) {
       ticketStatus !== "ON_SITE"
     ) {
       return res.status(400).json({
-        error: "Ticket not in ON_SITE state",
+        error: "Ticket not ready for RESOLUTION action",
       });
     }
 
