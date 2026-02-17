@@ -4,7 +4,13 @@ import express from "express";
 import { supabase } from "../supabaseClient.js";
 
 import { createActionToken } from "../services/tokenService.js";
-import { sendFETokenEmail, sendResolutionEmail } from "../services/emailService.js";
+
+import { createActionToken } from "../services/tokenService.js";
+import { 
+  sendFETokenEmail, 
+  sendResolutionEmail,
+  sendFEAssignmentEmail
+} from "../services/emailService.js";
 
 
 const router = express.Router();
@@ -74,6 +80,11 @@ router.post("/:id/assign", async (req, res) => {
         current_assignment_id: assignment?.id || null,
       })
       .eq("id", ticketId);
+// 🔥 Send basic assignment email
+sendFEAssignmentEmail({
+  feId,
+  ticketNumber: ticket.ticket_number,
+}).catch(console.error);
 
     // Always create ON_SITE token
     const token = await createActionToken({
