@@ -6,7 +6,7 @@ import { supabase } from "../supabaseClient.js";
 
 import { createActionToken } from "../services/tokenService.js";
 import { 
-  sendFETokenEmail, 
+  
   sendResolutionEmail,
   sendFEAssignmentEmail
 } from "../services/emailService.js";
