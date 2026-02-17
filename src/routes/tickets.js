@@ -2,9 +2,10 @@
 
 import express from "express";
 import { supabase } from "../supabaseClient.js";
+
 import { createActionToken } from "../services/tokenService.js";
-import { sendFETokenEmail } from "../services/emailService.js";
-import { handleClientResolutionNotification } from "../services/clientNotificationService.js";
+import { sendFETokenEmail, sendResolutionEmail } from "../services/emailService.js";
+
 
 const router = express.Router();
 
