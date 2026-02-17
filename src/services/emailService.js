@@ -159,6 +159,61 @@ Pariskq Operations Team
   }
 }
 
+/* =====================================================
+   FE ASSIGNMENT EMAIL (SIMPLE)
+===================================================== */
+export async function sendFEAssignmentEmail({
+  feId,
+  ticketNumber,
+}) {
+  try {
+    console.log("=== FE ASSIGNMENT EMAIL START ===");
+
+    if (!feId || !ticketNumber) {
+      console.error("Missing feId or ticketNumber");
+      return;
+    }
+
+    const { data: fe, error } = await supabase
+      .from("field_executives")
+      .select("email, name")
+      .eq("id", feId)
+      .single();
+
+    if (error || !fe?.email) {
+      console.error("FE email not found:", feId);
+      return;
+    }
+
+    await sendEmail(
+      {
+        From: process.env.FROM_EMAIL,
+        To: fe.email,
+        Subject: `New Ticket Assigned — ${ticketNumber}`,
+        TextBody: `
+Hello ${fe.name || ""},
+
+You have been assigned a new ticket.
+
+Ticket Number: ${ticketNumber}
+
+Please log into the Field Executive dashboard to view details.
+
+${process.env.FIELD_OPS_URL}
+
+Thank you,
+Pariskq Operations Team
+        `.trim(),
+      },
+      "FE_ASSIGNMENT"
+    );
+
+    console.log("=== FE ASSIGNMENT EMAIL SENT ===");
+
+  } catch (err) {
+    console.error("FE ASSIGNMENT EMAIL ERROR:", err);
+  }
+}
 
 /* =====================================================
    3️⃣ CLIENT RESOLUTION EMAIL (IDEMPOTENT)
