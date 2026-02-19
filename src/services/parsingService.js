@@ -1,3 +1,6 @@
+
+//parsingService.js
+// 
 import { getEmailText } from '../utils/emailParser.js';
 
 const LABELS = [

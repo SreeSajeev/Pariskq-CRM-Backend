@@ -1,3 +1,4 @@
+//emailParser.js
 import { Buffer } from 'buffer';
 
 function decodeBase64(content) {

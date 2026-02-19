@@ -189,8 +189,14 @@ export function classifyEmail(rawEmail) {
         const unsubscribeFound = /unsubscribe/i.test(combined) ? ['unsubscribe'] : [];
 
         const promoSignals = promoFound.length + promoFromPatterns.length + (linkCount >= 2 ? 1 : 0) + (unsubscribeFound.length ? 1 : 0);
+        // Only treat as promotional if NO complaint signals exist
+        const hasStructuredComplaint =
+            /\bCCM\d+\b/i.test(combined) ||
+            /\bVEHICLE\s+[A-Z0-9]+\b/i.test(combined);
 
-        if (promoSignals > 0) {
+        if (promoSignals > 0 && !hasStructuredComplaint) {
+
+        
             const details = [];
             if (promoFound.length) details.push(`keywords: ${promoFound.join(', ')}`);
             if (promoFromPatterns.length) details.push(`sender patterns: ${promoFromPatterns.join(', ')}`);
