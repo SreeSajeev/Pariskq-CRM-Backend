@@ -49,7 +49,21 @@ export async function createTicket(parsed, rawEmail) {
     throw err
   }
 
-  if (!rawEmail?.from_email) {
+  /* ===============================
+     SENDER RESOLUTION (HARDENED)
+     - Supports from_email
+     - Supports payload.FromFull.Email
+     - Supports payload.From
+     - Preserves original failure behavior
+  ================================ */
+
+  const senderEmail =
+    rawEmail?.from_email ||
+    rawEmail?.payload?.FromFull?.Email ||
+    rawEmail?.payload?.From ||
+    null
+
+  if (!senderEmail) {
     const err = new Error('Missing sender email in raw email')
     err.code = 'SENDER_EMAIL_MISSING'
     throw err
@@ -78,7 +92,7 @@ export async function createTicket(parsed, rawEmail) {
     category: parsed.category,
     issue_type: parsed.issue_type,
     location: parsed.location,
-    opened_by_email: rawEmail.from_email,
+    opened_by_email: senderEmail,
     opened_at: new Date().toISOString(),
     confidence_score: parsed.confidence_score,
     needs_review: parsed.needs_review,
@@ -90,9 +104,8 @@ export async function createTicket(parsed, rawEmail) {
      🔥 EMAIL MUST NEVER BLOCK
   ================================ */
 
-  // Fire-and-forget — demo safe
   sendTicketConfirmation({
-    toEmail: rawEmail.from_email,
+    toEmail: senderEmail,
     ticketNumber,
   }).catch(err => {
     console.error('[EMAIL:TICKET_CONFIRMATION]', {
