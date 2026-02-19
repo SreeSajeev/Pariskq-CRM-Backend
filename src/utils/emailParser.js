@@ -1,13 +1,14 @@
-//emailParser.jsimport { Buffer } from 'buffer';
+// /utils/emailParser.js
+import { Buffer } from 'buffer';
 
-/* ======================================================
-   SAFE BASE64 DECODER
-====================================================== */
-
-function decodeBase64IfNeeded(content) {
+/**
+ * Robust base64 detection & decoding
+ */
+function decodeIfBase64(content) {
   if (!content || typeof content !== 'string') return '';
 
   const stripped = content.replace(/\s/g, '');
+
   const looksBase64 =
     stripped.length > 100 &&
     /^[A-Za-z0-9+/=]+$/.test(stripped);
@@ -21,90 +22,49 @@ function decodeBase64IfNeeded(content) {
   }
 }
 
-/* ======================================================
-   HTML → STRUCTURED TEXT
-   Converts tables into "Label: Value" lines
-====================================================== */
-
-function htmlTableToStructuredText(html) {
-  if (!html) return '';
-
-  let clean = String(html)
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '');
-
-  const rows = clean.match(/<tr[\s\S]*?<\/tr>/gi);
-  if (!rows) return clean;
-
-  const structuredLines = [];
-
-  for (const row of rows) {
-    const cells = row.match(/<td[\s\S]*?<\/td>/gi);
-    if (!cells || cells.length < 2) continue;
-
-    const label = stripTags(cells[0]);
-    const value = stripTags(cells[1]);
-
-    if (label && value) {
-      structuredLines.push(`${label}: ${value}`);
-    }
-  }
-
-  return structuredLines.join('\n');
-}
-
-/* ======================================================
-   GENERIC HTML STRIPPER
-====================================================== */
-
-function stripTags(html) {
-  if (!html) return '';
-
-  return String(html)
-    .replace(/<\/?[^>]+(>|$)/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/* ======================================================
-   GENERAL HTML → TEXT
-====================================================== */
-
+/**
+ * Convert HTML → text
+ * Extracts table rows properly.
+ */
 function htmlToText(html) {
   if (!html) return '';
 
-  // First attempt structured table parsing
-  const structured = htmlTableToStructuredText(html);
-  if (structured && structured.includes(':')) {
-    return structured;
-  }
+  let cleaned = String(html);
 
-  // Fallback generic stripping
-  return stripTags(html);
-}
+  // Remove script/style
+  cleaned = cleaned
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '');
 
-/* ======================================================
-   NOISE REMOVAL
-====================================================== */
+  // Convert table rows into newline pairs
+  cleaned = cleaned
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/td>/gi, ' ')
+    .replace(/<td>/gi, ' ');
 
-function removeForwardedNoise(text) {
-  if (!text) return '';
+  // Remove remaining tags
+  cleaned = cleaned.replace(/<[^>]+>/g, ' ');
 
-  return text
-    .replace(/-----\s*Forwarded Message\s*-----/gi, '')
-    .replace(/Regards[\s\S]*/gi, '')
-    .replace(/Best regards[\s\S]*/gi, '')
-    .replace(/Thanks[\s\S]*/gi, '')
+  // Decode common entities
+  cleaned = cleaned
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+
+  return cleaned
+    .replace(/\r\n/g, '\n')
+    .replace(/\n+/g, '\n')
+    .replace(/[ \t]+/g, ' ')
     .trim();
 }
 
-/* ======================================================
-   NORMALIZATION
-====================================================== */
-
-function normalizeWhitespace(text) {
+/**
+ * Normalize spacing but preserve logical separation
+ */
+function normalize(text) {
   return text
     .replace(/\r\n/g, '\n')
     .replace(/\n+/g, '\n')
@@ -112,10 +72,9 @@ function normalizeWhitespace(text) {
     .trim();
 }
 
-/* ======================================================
-   PUBLIC API
-====================================================== */
-
+/**
+ * Unified Email Text Extractor
+ */
 export function getEmailText(raw) {
   try {
     let payload = raw?.payload;
@@ -130,27 +89,21 @@ export function getEmailText(raw) {
 
     const subject = raw?.subject || '';
 
-    const decodedTextBody = decodeBase64IfNeeded(
+    const textBody = decodeIfBase64(
       payload?.TextBody || payload?.textBody || ''
     );
 
-    const decodedHtmlBody = decodeBase64IfNeeded(
+    const htmlBodyDecoded = decodeIfBase64(
       payload?.HtmlBody || payload?.htmlBody || ''
     );
 
-    const htmlConverted = htmlToText(decodedHtmlBody);
+    const htmlText = htmlToText(htmlBodyDecoded);
 
-    const combined = [
-      subject,
-      decodedTextBody,
-      htmlConverted
-    ]
-      .filter(Boolean)
-      .join('\n');
-
-    const cleaned = removeForwardedNoise(combined);
-
-    return normalizeWhitespace(cleaned);
+    return normalize(
+      [subject, textBody, htmlText]
+        .filter(Boolean)
+        .join('\n')
+    );
   } catch {
     return '';
   }

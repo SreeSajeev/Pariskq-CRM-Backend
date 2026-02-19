@@ -1,10 +1,5 @@
-
-//parsingService.js
+// /services/parsingService.js
 import { getEmailText } from '../utils/emailParser.js';
-
-/* ======================================================
-   CONFIG
-====================================================== */
 
 const FIELD_LABELS = [
   'Category',
@@ -15,87 +10,40 @@ const FIELD_LABELS = [
   'Incident Title'
 ];
 
-/* ======================================================
-   UTILITIES
-====================================================== */
-
-function safeString(value) {
-  if (!value) return '';
-  return String(value).trim();
-}
-
-function normalizeWhitespace(text) {
-  return safeString(text)
-    .replace(/\r\n/g, '\n')
-    .replace(/\n+/g, '\n')
-    .replace(/[ \t]+/g, ' ')
-    .trim();
-}
-
-/* ======================================================
-   TOKENIZATION ENGINE
-   Works for:
-   - single-line
-   - shuffled labels
-   - html converted text
-====================================================== */
-
-function extractFieldsFromText(text) {
-  const result = {};
-  const lowerText = text.toLowerCase();
-
-  const labelPositions = [];
-
-  for (const label of FIELD_LABELS) {
-    const regex = new RegExp(`\\b${label}\\b`, 'i');
-    const match = regex.exec(text);
-    if (match) {
-      labelPositions.push({
-        label,
-        index: match.index
-      });
-    }
-  }
-
-  // Sort by appearance order
-  labelPositions.sort((a, b) => a.index - b.index);
-
-  for (let i = 0; i < labelPositions.length; i++) {
-    const current = labelPositions[i];
-    const next = labelPositions[i + 1];
-
-    const startIndex = current.index + current.label.length;
-    const endIndex = next ? next.index : text.length;
-
-    const rawValue = text.slice(startIndex, endIndex);
-
-    const cleaned = rawValue
-      .replace(/^[:\-\s]+/, '')
-      .trim();
-
-    result[current.label] = cleaned || null;
-  }
-
-  return result;
-}
-
-/* ======================================================
-   STRUCTURED EXTRACTIONS
-====================================================== */
-
+/**
+ * Extract complaint ID (CCM format)
+ */
 function extractComplaintId(text) {
   const match = text.match(/\bCCM\d{4,15}\b/i);
   return match ? match[0].toUpperCase() : null;
 }
 
+/**
+ * Extract vehicle (Indian registration robust)
+ */
 function extractVehicle(text) {
-  const match = text.match(/\bVEHICLE\s+([A-Z0-9-]{4,20})\b/i);
+  const match = text.match(
+    /\bVEHICLE\s+([A-Z]{2,3}\d{1,2}[A-Z]{0,2}\d{3,4})\b/i
+  );
   return match ? match[1].toUpperCase() : null;
 }
 
-/* ======================================================
-   PUBLIC PARSER
-====================================================== */
+/**
+ * Order-independent label extraction
+ */
+function extractField(label, text) {
+  const otherLabels = FIELD_LABELS
+    .filter(l => l !== label)
+    .join('|');
+
+  const regex = new RegExp(
+    `${label}\\s*[:\\-]?\\s*(.*?)\\s*(?=${otherLabels}|$)`,
+    'i'
+  );
+
+  const match = text.match(regex);
+  return match ? match[1].trim() : null;
+}
 
 export function parseEmail(raw) {
   const parse_errors = [];
@@ -109,7 +57,7 @@ export function parseEmail(raw) {
     reported_at: null,
     remarks: null,
     attachments: [],
-    parse_errors
+    parse_errors,
   };
 
   let text;
@@ -126,38 +74,23 @@ export function parseEmail(raw) {
     return result;
   }
 
-  text = normalizeWhitespace(text);
+  // Normalize aggressively for flattened emails
+  text = text.replace(/\s+/g, ' ').trim();
 
-  // Structured IDs first (independent of label order)
   result.complaint_id = extractComplaintId(text);
   result.vehicle_number = extractVehicle(text);
 
-  const extractedFields = extractFieldsFromText(text);
+  result.category = extractField('Category', text);
+  result.issue_type = extractField('Item Name', text);
+  result.location = extractField('Location', text);
+  result.remarks = extractField('Remarks', text);
+  result.reported_at = extractField('Reported At', text);
 
-  result.category = extractedFields['Category'] || null;
-  result.issue_type = extractedFields['Item Name'] || null;
-  result.location = extractedFields['Location'] || null;
-  result.remarks = extractedFields['Remarks'] || null;
-  result.reported_at = extractedFields['Reported At'] || null;
-
-  /* ======================================================
-     VALIDATION
-  ====================================================== */
-
-  if (!result.complaint_id)
-    parse_errors.push('complaint_id missing');
-
-  if (!result.vehicle_number)
-    parse_errors.push('vehicle_number missing');
-
-  if (!result.issue_type)
-    parse_errors.push('issue_type missing');
-
-  if (!result.category)
-    parse_errors.push('category missing');
-
-  if (!result.location)
-    parse_errors.push('location missing');
+  if (!result.complaint_id) parse_errors.push('complaint_id missing');
+  if (!result.vehicle_number) parse_errors.push('vehicle_number missing');
+  if (!result.issue_type) parse_errors.push('issue_type missing');
+  if (!result.category) parse_errors.push('category missing');
+  if (!result.location) parse_errors.push('location missing');
 
   return result;
 }
