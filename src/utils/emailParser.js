@@ -1,58 +1,76 @@
 //emailParser.js
 import { Buffer } from 'buffer';
 
-function decodeBase64(content) {
-  if (!content) return '';
+function decodeBase64IfNeeded(content) {
+  if (!content || typeof content !== 'string') return '';
 
-  const isLikelyBase64 =
-    typeof content === 'string' &&
-    content.length > 200 &&
-    /^[A-Za-z0-9+/=\r\n]+$/.test(content.replace(/\s/g, ''));
+  const stripped = content.replace(/\s/g, '');
+  const looksBase64 =
+    stripped.length > 200 &&
+    /^[A-Za-z0-9+/=]+$/.test(stripped);
 
-  if (!isLikelyBase64) return content;
+  if (!looksBase64) return content;
 
   try {
-    return Buffer.from(content, 'base64').toString('utf-8');
+    return Buffer.from(stripped, 'base64').toString('utf-8');
   } catch {
     return content;
   }
 }
 
-function stripHtml(html) {
+function htmlToText(html) {
   if (!html) return '';
 
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
+  return String(html)
     .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
     .replace(/<\/tr>/gi, '\n')
     .replace(/<\/p>/gi, '\n')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/td>/gi, ' ')
-    .replace(/<[^>]*>/g, '')
+    .replace(/<td>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
     .replace(/\r\n/g, '\n')
     .replace(/\n+/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+}
+
+function normalize(text) {
+  return text
+    .replace(/\r\n/g, '\n')
+    .replace(/\n+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
 export function getEmailText(raw) {
-  let payload = raw.payload;
+  try {
+    let payload = raw?.payload;
 
-  if (typeof payload === 'string') {
-    try {
-      payload = JSON.parse(payload);
-    } catch {
-      payload = {};
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch {
+        payload = {};
+      }
     }
+
+    const subject = raw?.subject || '';
+
+    const textBody = decodeBase64IfNeeded(payload?.TextBody || '');
+    const htmlBody = htmlToText(
+      decodeBase64IfNeeded(payload?.HtmlBody || '')
+    );
+
+    return normalize(
+      [subject, textBody, htmlBody]
+        .filter(Boolean)
+        .join(' ')
+    );
+  } catch {
+    return '';
   }
-
-  const subject = raw.subject || '';
-  const textBody = decodeBase64(payload?.TextBody || '');
-  const htmlBodyRaw = decodeBase64(payload?.HtmlBody || '');
-  const htmlBody = stripHtml(htmlBodyRaw);
-
-  return `
-${subject}
-${textBody}
-${htmlBody}
-`.replace(/\r\n/g, '\n').trim();
 }

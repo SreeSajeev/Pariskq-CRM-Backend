@@ -1,55 +1,43 @@
 
 //parsingService.js
-// 
 import { getEmailText } from '../utils/emailParser.js';
 
-const LABELS = [
+const FIELD_LABELS = [
   'Category',
   'Item Name',
-  'Incident Title',
   'Location',
   'Remarks',
-  'Reported At'
+  'Reported At',
+  'Incident Title'
 ];
 
-function tokenize(text) {
+function normalize(text) {
   return text
-    .split(/\n+/)
-    .map(line => line.trim())
-    .filter(Boolean);
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function extractByScanning(lines) {
-  const result = {};
-  let currentLabel = null;
+function extractField(label, text) {
+  const otherLabels = FIELD_LABELS
+    .filter(l => l !== label)
+    .join('|');
 
-  for (const line of lines) {
-    const matchedLabel = LABELS.find(label =>
-      new RegExp(`^${label}\\b`, 'i').test(line)
-    );
+  const regex = new RegExp(
+    `${label}\\s*[:\\-]?\\s*(.*?)\\s*(?=${otherLabels}|$)`,
+    'i'
+  );
 
-    if (matchedLabel) {
-      currentLabel = matchedLabel;
-      const value = line.replace(new RegExp(`^${matchedLabel}\\s*[:\\-]?`, 'i'), '').trim();
-      result[currentLabel] = value || '';
-      continue;
-    }
-
-    if (currentLabel) {
-      result[currentLabel] += ` ${line}`;
-    }
-  }
-
-  return result;
+  const match = text.match(regex);
+  return match ? match[1].trim() : null;
 }
 
 function extractComplaintId(text) {
-  const match = text.match(/\bCCM\d+\b/i);
+  const match = text.match(/\bCCM\d{4,15}\b/i);
   return match ? match[0] : null;
 }
 
 function extractVehicle(text) {
-  const match = text.match(/\bVEHICLE\s+([A-Z0-9]+)\b/i);
+  const match = text.match(/\bVEHICLE\s+([A-Z0-9-]+)\b/i);
   return match ? match[1] : null;
 }
 
@@ -65,7 +53,7 @@ export function parseEmail(raw) {
     reported_at: null,
     remarks: null,
     attachments: [],
-    parse_errors
+    parse_errors,
   };
 
   let text = '';
@@ -82,17 +70,16 @@ export function parseEmail(raw) {
     return result;
   }
 
-  const lines = tokenize(text);
-  const structured = extractByScanning(lines);
+  text = normalize(text);
 
   result.complaint_id = extractComplaintId(text);
   result.vehicle_number = extractVehicle(text);
 
-  result.category = structured['Category'] || null;
-  result.issue_type = structured['Item Name'] || null;
-  result.location = structured['Location'] || null;
-  result.remarks = structured['Remarks'] || null;
-  result.reported_at = structured['Reported At'] || null;
+  result.category = extractField('Category', text);
+  result.issue_type = extractField('Item Name', text);
+  result.location = extractField('Location', text);
+  result.remarks = extractField('Remarks', text);
+  result.reported_at = extractField('Reported At', text);
 
   if (!result.complaint_id) parse_errors.push('complaint_id missing');
   if (!result.vehicle_number) parse_errors.push('vehicle_number missing');
