@@ -1,13 +1,55 @@
 import { getEmailText } from '../utils/emailParser.js';
 
-/**
- * Robust email parser
- * - HTML-safe
- * - Label-boundary aware
- * - Non-greedy extraction
- * - Backward compatible
- * - Never throws
- */
+const LABELS = [
+  'Category',
+  'Item Name',
+  'Incident Title',
+  'Location',
+  'Remarks',
+  'Reported At'
+];
+
+function tokenize(text) {
+  return text
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(Boolean);
+}
+
+function extractByScanning(lines) {
+  const result = {};
+  let currentLabel = null;
+
+  for (const line of lines) {
+    const matchedLabel = LABELS.find(label =>
+      new RegExp(`^${label}\\b`, 'i').test(line)
+    );
+
+    if (matchedLabel) {
+      currentLabel = matchedLabel;
+      const value = line.replace(new RegExp(`^${matchedLabel}\\s*[:\\-]?`, 'i'), '').trim();
+      result[currentLabel] = value || '';
+      continue;
+    }
+
+    if (currentLabel) {
+      result[currentLabel] += ` ${line}`;
+    }
+  }
+
+  return result;
+}
+
+function extractComplaintId(text) {
+  const match = text.match(/\bCCM\d+\b/i);
+  return match ? match[0] : null;
+}
+
+function extractVehicle(text) {
+  const match = text.match(/\bVEHICLE\s+([A-Z0-9]+)\b/i);
+  return match ? match[1] : null;
+}
+
 export function parseEmail(raw) {
   const parse_errors = [];
 
@@ -20,100 +62,34 @@ export function parseEmail(raw) {
     reported_at: null,
     remarks: null,
     attachments: [],
-    parse_errors,
+    parse_errors
   };
 
   let text = '';
 
-  /* =====================================================
-     STEP 1: Extract + Normalize Body
-  ===================================================== */
   try {
-    const extracted = getEmailText(raw);
-
-    if (typeof extracted === 'string' && extracted.trim().length > 0) {
-      text = extracted;
-
-      // Normalize whitespace
-      text = text.replace(/\r\n/g, ' ');
-      text = text.replace(/\n/g, ' ');
-      text = text.replace(/\t/g, ' ');
-
-      // Remove residual HTML tags (safety)
-      text = text.replace(/<[^>]*>/g, ' ');
-
-      // Collapse multi-spaces
-      text = text.replace(/\s+/g, ' ').trim();
-    } else {
-      parse_errors.push('Email body was empty or unreadable');
-    }
+    text = getEmailText(raw);
   } catch {
     parse_errors.push('Failed to extract email body');
-  }
-
-  if (!text) {
     return result;
   }
 
-  /* =====================================================
-     STEP 2: Smart Label-Based Extraction
-  ===================================================== */
-
-  const labels = [
-    'Category',
-    'Item Name',
-    'Incident Title',
-    'Location',
-    'Remarks',
-    'Reported At',
-  ];
-
-  const buildRegex = (label) => {
-    const nextLabels = labels
-      .filter(l => l !== label)
-      .join('|');
-
-    return new RegExp(
-      `${label}\\s*[:\\-]?\\s*(.*?)\\s*(?=${nextLabels}|$)`,
-      'i'
-    );
-  };
-
-  const safeExtract = (label) => {
-    try {
-      const regex = buildRegex(label);
-      const match = text.match(regex);
-      if (!match || !match[1]) return null;
-      return match[1].trim();
-    } catch {
-      parse_errors.push(`Failed while extracting ${label}`);
-      return null;
-    }
-  };
-
-  /* =====================================================
-     STEP 3: Field Extraction
-  ===================================================== */
-
-  const complaint_id = text.match(/\b(CCM\w+)\b/i);
-  if (complaint_id) {
-    result.complaint_id = complaint_id[1].trim();
+  if (!text) {
+    parse_errors.push('Email body empty');
+    return result;
   }
 
-  const vehicle_number = text.match(/\bVEHICLE\s*([A-Z0-9]+)\b/i);
-  if (vehicle_number) {
-    result.vehicle_number = vehicle_number[1].trim();
-  }
+  const lines = tokenize(text);
+  const structured = extractByScanning(lines);
 
-  result.category = safeExtract('Category');
-  result.issue_type = safeExtract('Item Name');
-  result.location = safeExtract('Location');
-  result.remarks = safeExtract('Remarks');
-  result.reported_at = safeExtract('Reported At');
+  result.complaint_id = extractComplaintId(text);
+  result.vehicle_number = extractVehicle(text);
 
-  /* =====================================================
-     STEP 4: Missing Field Tracking
-  ===================================================== */
+  result.category = structured['Category'] || null;
+  result.issue_type = structured['Item Name'] || null;
+  result.location = structured['Location'] || null;
+  result.remarks = structured['Remarks'] || null;
+  result.reported_at = structured['Reported At'] || null;
 
   if (!result.complaint_id) parse_errors.push('complaint_id missing');
   if (!result.vehicle_number) parse_errors.push('vehicle_number missing');

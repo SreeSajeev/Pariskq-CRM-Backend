@@ -1,9 +1,8 @@
 import { Buffer } from 'buffer';
 
-function decodeBase64IfNeeded(content) {
+function decodeBase64(content) {
   if (!content) return '';
 
-  // Heuristic: detect base64 (long string, no spaces, mostly A-Za-z0-9+/=)
   const isLikelyBase64 =
     typeof content === 'string' &&
     content.length > 200 &&
@@ -20,11 +19,17 @@ function decodeBase64IfNeeded(content) {
 
 function stripHtml(html) {
   if (!html) return '';
+
   return html
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/td>/gi, ' ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n+/g, '\n')
     .trim();
 }
 
@@ -40,15 +45,13 @@ export function getEmailText(raw) {
   }
 
   const subject = raw.subject || '';
-
-  const textBody = decodeBase64IfNeeded(payload?.TextBody || '');
-  const htmlBodyRaw = decodeBase64IfNeeded(payload?.HtmlBody || '');
-
+  const textBody = decodeBase64(payload?.TextBody || '');
+  const htmlBodyRaw = decodeBase64(payload?.HtmlBody || '');
   const htmlBody = stripHtml(htmlBodyRaw);
 
   return `
 ${subject}
 ${textBody}
 ${htmlBody}
-`.replace(/\s+/g, ' ').trim();
+`.replace(/\r\n/g, '\n').trim();
 }
