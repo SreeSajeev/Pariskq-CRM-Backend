@@ -74,26 +74,47 @@ Pariskq Operations Team
   }
 }
 
-export async function sendMissingDetailsEmail({ toEmail, ticketNumber, missingDetails }) {
+function formatOptional(value) {
+  if (value == null || String(value).trim() === "") return null;
+  return String(value).trim();
+}
+
+export async function sendMissingDetailsEmail({ toEmail, ticketNumber, missingDetails, receivedDetails, subject, complaintId, category, issueType, location }) {
   if (!isValidToEmail(toEmail)) return;
   if (!isValidTicketNumber(ticketNumber)) return;
 
   try {
     const subjectTag = generateTicketSubjectTag(ticketNumber);
-    const detailsList = Array.isArray(missingDetails) && missingDetails.length > 0
+    const receivedList = Array.isArray(receivedDetails) && receivedDetails.length > 0
+      ? receivedDetails.map((d) => `• ${d}`).join("\n")
+      : "• None listed";
+    const missingList = Array.isArray(missingDetails) && missingDetails.length > 0
       ? missingDetails.map((d) => `• ${d}`).join("\n")
       : "• Additional information to help us process your request";
+
+    const summaryLines = [];
+    if (formatOptional(subject)) summaryLines.push(`Subject: ${formatOptional(subject)}`);
+    if (formatOptional(complaintId)) summaryLines.push(`Complaint ID: ${formatOptional(complaintId)}`);
+    if (formatOptional(category)) summaryLines.push(`Category: ${formatOptional(category)}`);
+    if (formatOptional(issueType)) summaryLines.push(`Issue type: ${formatOptional(issueType)}`);
+    if (formatOptional(location)) summaryLines.push(`Location: ${formatOptional(location)}`);
+    const complaintSummary = summaryLines.length > 0 ? summaryLines.join("\n") : "—";
 
     const body = `
 Hello,
 
-We have received your ticket (${ticketNumber}) and need a few more details to proceed.
+Your ticket ${ticketNumber} has been created. We need a few more details to proceed.
 
-Please provide the following:
+Reference (what we have so far):
+${complaintSummary}
 
-${detailsList}
+Fields we received:
+${receivedList}
 
-Please reply to this email with the requested information. Our team will update your ticket accordingly.
+Fields we need:
+${missingList}
+
+When replying, please include [Ticket ID: ${ticketNumber}] in the subject line.
 
 Thank you,
 Pariskq Operations Team

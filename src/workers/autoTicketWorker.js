@@ -10,14 +10,14 @@ import {
   findTicketByComplaintId,
   findTicketByTicketNumber,
   updateTicketStatus,
+  updateTicketFields,
 } from '../repositories/ticketsRepo.js';
-import { parseEmail } from '../services/parsingService.js';
+import { parseEmail, parseEmailFromText } from '../services/parsingService.js';
 import { calculateConfidence } from '../services/confidenceService.js';
 import { addEmailComment } from '../services/commentService.js';
-import { createTicket, hasRequiredFieldsForOpen } from '../services/ticketService.js';
+import { createTicket, hasRequiredFieldsForOpen, countStructuredComplaintFields, mergeParsedIntoTicket } from '../services/ticketService.js';
 import { classifyEmail } from '../services/emailClassificationService.js';
 import { validateRequiredFields } from '../services/requiredFieldValidator.js';
-import { sendMissingInfoEmail } from '../services/customerClarificationService.js';
 import { getEmailText } from '../utils/emailParser.js';
 import { supabase } from '../supabaseClient.js';
 
@@ -64,6 +64,24 @@ async function handleReplyFlow(raw, ticket) {
     }
   }
 
+  let mergedTicket = { ...ticket };
+  if (content) {
+    try {
+      const replyParsed = parseEmailFromText(content);
+      const merge = mergeParsedIntoTicket(ticket, replyParsed);
+      if (Object.keys(merge).length > 0) {
+        const result = await updateTicketFields(ticket.id, merge);
+        if (result.error) {
+          console.error(`[REPLY] updateTicketFields failed ticket ${ticket.id}`, result.error.message, merge);
+        } else {
+          mergedTicket = { ...ticket, ...merge };
+        }
+      }
+    } catch (err) {
+      console.error(`[REPLY] parse/merge failed ticket ${ticket.id}`, err.message);
+    }
+  }
+
   await supabase.from('audit_logs').insert({
     entity_type: 'ticket',
     entity_id: ticket.id,
@@ -71,7 +89,7 @@ async function handleReplyFlow(raw, ticket) {
     metadata: { raw_email_id: raw.id },
   });
 
-  if (ticket.status === 'NEEDS_REVIEW' && hasRequiredFieldsForOpen(ticket)) {
+  if (ticket.status === 'NEEDS_REVIEW' && hasRequiredFieldsForOpen(mergedTicket)) {
     const { error: updateErr } = await updateTicketStatus(ticket.id, 'OPEN');
     if (updateErr) {
       console.error(`[REPLY] updateTicketStatus failed ticket ${ticket.id}`, updateErr.message);
@@ -121,21 +139,12 @@ export async function runAutoTicketWorker() {
 
       const parsed = parseEmail(raw);
 
-      const validation = validateRequiredFields(parsed);
-      if (!validation.isComplete) {
-        await updateRawEmailStatus(raw.id, 'AWAITING_CUSTOMER_INFO', {
-          missing_fields: validation.missingFields,
-        });
-        await Promise.resolve(
-          sendMissingInfoEmail({
-            to: raw.from_email || null,
-            originalSubject: raw.subject || '',
-            missingFields: validation.missingFields,
-          })
-        );
+      if (countStructuredComplaintFields(parsed) < 2) {
+        await updateRawEmailStatus(raw.id, 'IGNORED_INSUFFICIENT_DATA');
         continue;
       }
 
+      const validation = validateRequiredFields(parsed);
       const confidence = calculateConfidence(parsed);
 
       const { data: parsedRow, error: parsedError } = await insertParsedEmail({
@@ -150,11 +159,6 @@ export async function runAutoTicketWorker() {
         await updateRawEmailStatus(raw.id, 'ERROR', {
           processing_error: 'Parsed email insert failed',
         });
-        continue;
-      }
-
-      if (confidence < 80) {
-        await updateRawEmailStatus(raw.id, 'DRAFT');
         continue;
       }
 
@@ -182,7 +186,8 @@ export async function runAutoTicketWorker() {
           confidence_score: confidence,
           needs_review: confidence < 95,
         },
-        raw
+        raw,
+        { requiredComplete: validation.isComplete }
       );
 
       await updateRawEmailStatus(raw.id, 'TICKET_CREATED');

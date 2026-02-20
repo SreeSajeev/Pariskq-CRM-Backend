@@ -3,11 +3,13 @@ import { getEmailText } from '../utils/emailParser.js';
 
 const FIELD_LABELS = [
   'Category',
+  'Issue type',
   'Item Name',
   'Location',
   'Remarks',
   'Reported At',
-  'Incident Title'
+  'Incident Title',
+  'Vehicle number'
 ];
 
 /**
@@ -78,10 +80,10 @@ export function parseEmail(raw) {
   text = text.replace(/\s+/g, ' ').trim();
 
   result.complaint_id = extractComplaintId(text);
-  result.vehicle_number = extractVehicle(text);
+  result.vehicle_number = extractVehicle(text) || extractField('Vehicle number', text);
 
   result.category = extractField('Category', text);
-  result.issue_type = extractField('Item Name', text);
+  result.issue_type = extractField('Issue type', text) || extractField('Item Name', text);
   result.location = extractField('Location', text);
   result.remarks = extractField('Remarks', text);
   result.reported_at = extractField('Reported At', text);
@@ -92,5 +94,28 @@ export function parseEmail(raw) {
   if (!result.category) parse_errors.push('category missing');
   if (!result.location) parse_errors.push('location missing');
 
+  return result;
+}
+
+export function parseEmailFromText(text) {
+  const result = {
+    complaint_id: null,
+    vehicle_number: null,
+    issue_type: null,
+    category: null,
+    location: null,
+    reported_at: null,
+    remarks: null,
+  };
+  if (!text || typeof text !== 'string') return result;
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return result;
+  result.complaint_id = extractComplaintId(normalized);
+  result.vehicle_number = extractVehicle(normalized) || extractField('Vehicle number', normalized);
+  result.category = extractField('Category', normalized);
+  result.issue_type = extractField('Issue type', normalized) || extractField('Item Name', normalized);
+  result.location = extractField('Location', normalized);
+  result.remarks = extractField('Remarks', normalized);
+  result.reported_at = extractField('Reported At', normalized);
   return result;
 }

@@ -24,7 +24,7 @@ export async function findTicketByTicketNumber(ticketNumber) {
 
   const { data, error } = await supabase
     .from('tickets')
-    .select('id, status, vehicle_number, issue_type, location')
+    .select('id, status, complaint_id, vehicle_number, category, issue_type, location')
     .eq('ticket_number', trimmed)
     .limit(1)
     .maybeSingle();
@@ -38,6 +38,14 @@ export async function updateTicketStatus(ticketId, status) {
   return supabase
     .from('tickets')
     .update({ status })
+    .eq('id', ticketId);
+}
+
+export async function updateTicketFields(ticketId, fields) {
+  if (!ticketId || !fields || typeof fields !== 'object') return { error: new Error('Missing ticketId or fields') };
+  return supabase
+    .from('tickets')
+    .update(fields)
     .eq('id', ticketId);
 }
 

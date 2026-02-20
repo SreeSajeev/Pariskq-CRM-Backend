@@ -25,7 +25,7 @@ app.use(
   cors({
     origin: [
       "https://opsxbypariskq.vercel.app",
-      "http://localhost:5173",
+      "http://localhost:3000",
     ],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -132,11 +132,19 @@ app.post("/postmark-webhook", async (req, res) => {
       return res.status(400).send("Invalid payload");
     }
 
+    const fromEmail = email.FromFull?.Email || email.From || null;
+    const toEmail = email.ToFull?.Email || email.To || null;
+    console.log("[POSTMARK] webhook received", {
+      MessageID: email.MessageID,
+      from_email: fromEmail,
+      to_email: toEmail,
+    });
+
     const insertPayload = {
       message_id: email.MessageID,
       thread_id: email.ThreadID || null,
-      from_email: email.FromFull?.Email || email.From || null,
-      to_email: email.ToFull?.Email || email.To || null,
+      from_email: fromEmail,
+      to_email: toEmail,
       subject: email.Subject || null,
       received_at: email.ReceivedAt || new Date().toISOString(),
       payload: email,
@@ -144,15 +152,18 @@ app.post("/postmark-webhook", async (req, res) => {
       created_at: new Date().toISOString(),
     };
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("raw_emails")
-      .insert(insertPayload);
+      .insert(insertPayload)
+      .select("id")
+      .single();
 
     if (error) {
-      console.error("[POSTMARK] Insert failed", error);
+      console.error("[POSTMARK] Insert failed", error.code, error.message);
       return res.status(500).send("Failed to store email");
     }
 
+    console.log("[POSTMARK] Insert ok", { id: data?.id });
     return res.status(200).send("Email received");
   } catch (err) {
     console.error("[POSTMARK] Exception", err);

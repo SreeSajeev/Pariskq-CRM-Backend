@@ -15,10 +15,28 @@ function deriveMissingDetails(parsed) {
   return list;
 }
 
+function deriveReceivedDetails(parsed) {
+  if (!parsed || typeof parsed !== 'object') return [];
+  const labels = [];
+  if (safeHasValue(parsed.complaint_id)) labels.push('Complaint ID');
+  if (safeHasValue(parsed.vehicle_number)) labels.push('Vehicle number');
+  if (safeHasValue(parsed.category)) labels.push('Category');
+  if (safeHasValue(parsed.issue_type)) labels.push('Issue type');
+  if (safeHasValue(parsed.location)) labels.push('Location');
+  return labels;
+}
+
 function safeHasValue(v) {
   if (v === undefined || v === null) return false;
   if (typeof v === 'string' && v.trim() === '') return false;
   return true;
+}
+
+const STRUCTURED_FIELDS = ['complaint_id', 'vehicle_number', 'category', 'issue_type', 'location'];
+
+export function countStructuredComplaintFields(parsed) {
+  if (!parsed || typeof parsed !== 'object') return 0;
+  return STRUCTURED_FIELDS.filter((key) => safeHasValue(parsed[key])).length;
 }
 
 export function hasRequiredFieldsForOpen(ticket) {
@@ -30,7 +48,18 @@ export function hasRequiredFieldsForOpen(ticket) {
   );
 }
 
-export async function createTicket(parsed, rawEmail) {
+export function mergeParsedIntoTicket(ticketRow, parsedReply) {
+  if (!ticketRow || !parsedReply || typeof ticketRow !== 'object' || typeof parsedReply !== 'object') return {};
+  const out = {};
+  for (const key of STRUCTURED_FIELDS) {
+    if (!safeHasValue(ticketRow[key]) && safeHasValue(parsedReply[key])) {
+      out[key] = parsedReply[key];
+    }
+  }
+  return out;
+}
+
+export async function createTicket(parsed, rawEmail, options = {}) {
   if (!parsed) {
     const err = new Error('Parsed email is null in createTicket')
     err.code = 'PARSED_EMAIL_NULL'
@@ -40,12 +69,6 @@ export async function createTicket(parsed, rawEmail) {
   if (!rawEmail || typeof rawEmail !== 'object') {
     const err = new Error('Missing or invalid raw email in createTicket')
     err.code = 'RAW_EMAIL_MISSING'
-    throw err
-  }
-
-  if (parsed.confidence_score == null) {
-    const err = new Error('Parsed email missing confidence_score')
-    err.code = 'CONFIDENCE_SCORE_MISSING'
     throw err
   }
 
@@ -61,12 +84,9 @@ export async function createTicket(parsed, rawEmail) {
     throw err
   }
 
+  const requiredComplete = options.requiredComplete === true
   const ticketNumber = generateTicketNumber()
-
-  const status =
-    parsed.confidence_score >= 95
-      ? 'OPEN'
-      : 'NEEDS_REVIEW'
+  const status = requiredComplete ? 'OPEN' : 'NEEDS_REVIEW'
 
   await insertTicket({
     ticket_number: ticketNumber,
@@ -83,21 +103,28 @@ export async function createTicket(parsed, rawEmail) {
     source: 'EMAIL',
   })
 
-  sendTicketConfirmation({
-    toEmail: senderEmail,
-    ticketNumber,
-  }).catch(err => {
-    console.error('[EMAIL:TICKET_CONFIRMATION]', { ticketNumber, message: err.message })
-  })
-
   if (status === 'NEEDS_REVIEW') {
     const missingDetails = deriveMissingDetails(parsed)
+    const receivedDetails = deriveReceivedDetails(parsed)
     sendMissingDetailsEmail({
       toEmail: senderEmail,
       ticketNumber,
       missingDetails,
+      receivedDetails,
+      subject: rawEmail?.subject || null,
+      complaintId: parsed.complaint_id,
+      category: parsed.category,
+      issueType: parsed.issue_type,
+      location: parsed.location,
     }).catch(err => {
       console.error('[EMAIL:MISSING_DETAILS]', { ticketNumber, message: err.message })
+    })
+  } else {
+    sendTicketConfirmation({
+      toEmail: senderEmail,
+      ticketNumber,
+    }).catch(err => {
+      console.error('[EMAIL:TICKET_CONFIRMATION]', { ticketNumber, message: err.message })
     })
   }
 
