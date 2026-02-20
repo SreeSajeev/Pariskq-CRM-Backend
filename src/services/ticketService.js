@@ -1,42 +1,36 @@
-/*import { generateTicketNumber } from '../utils/ticketNumber.js';
-import { insertTicket } from '../repositories/ticketsRepo.js';
-
-export async function createTicket(parsed, rawEmail) {
-  const ticketNumber = generateTicketNumber();
-  const status = parsed.confidence_score >= 95 ? 'OPEN' : 'NEEDS_REVIEW';
-
-  await insertTicket({
-    ticket_number: ticketNumber,
-    status,
-    complaint_id: parsed.complaint_id,
-    vehicle_number: parsed.vehicle_number,
-    category: parsed.category,
-    issue_type: parsed.issue_type,
-    location: parsed.location,
-    opened_by_email: rawEmail.from_email,
-    opened_at: new Date().toISOString(),
-    confidence_score: parsed.confidence_score,
-    needs_review: parsed.needs_review,
-    source: 'EMAIL',
-  });
-
-  return ticketNumber;
-}
-*/
 // src/services/ticketService.js
 
 import { generateTicketNumber } from '../utils/ticketNumber.js'
 import { insertTicket } from '../repositories/ticketsRepo.js'
-import { sendTicketConfirmation } from './emailService.js'
+import { sendTicketConfirmation, sendMissingDetailsEmail } from './emailService.js'
 
-/* =====================================================
-   CREATE TICKET — AUTHORITATIVE
-===================================================== */
+function deriveMissingDetails(parsed) {
+  if (!parsed || typeof parsed !== 'object') return [];
+  const list = [];
+  if (parsed.complaint_id == null || String(parsed.complaint_id).trim() === '') list.push('Complaint ID');
+  if (parsed.vehicle_number == null || String(parsed.vehicle_number).trim() === '') list.push('Vehicle number');
+  if (parsed.category == null || String(parsed.category).trim() === '') list.push('Category');
+  if (parsed.issue_type == null || String(parsed.issue_type).trim() === '') list.push('Issue type');
+  if (parsed.location == null || String(parsed.location).trim() === '') list.push('Location');
+  return list;
+}
+
+function safeHasValue(v) {
+  if (v === undefined || v === null) return false;
+  if (typeof v === 'string' && v.trim() === '') return false;
+  return true;
+}
+
+export function hasRequiredFieldsForOpen(ticket) {
+  if (!ticket || typeof ticket !== 'object') return false;
+  return (
+    safeHasValue(ticket.vehicle_number) &&
+    safeHasValue(ticket.issue_type) &&
+    safeHasValue(ticket.location)
+  );
+}
+
 export async function createTicket(parsed, rawEmail) {
-  /* ===============================
-     VALIDATION (HARD FAILS)
-  ================================ */
-
   if (!parsed) {
     const err = new Error('Parsed email is null in createTicket')
     err.code = 'PARSED_EMAIL_NULL'
@@ -55,14 +49,6 @@ export async function createTicket(parsed, rawEmail) {
     throw err
   }
 
-  /* ===============================
-     SENDER RESOLUTION (HARDENED)
-     - Supports from_email
-     - Supports payload.FromFull.Email
-     - Supports payload.From
-     - Preserves original failure behavior
-  ================================ */
-
   const senderEmail =
     rawEmail?.from_email ||
     rawEmail?.payload?.FromFull?.Email ||
@@ -75,20 +61,12 @@ export async function createTicket(parsed, rawEmail) {
     throw err
   }
 
-  /* ===============================
-     BUSINESS RULES
-  ================================ */
-
   const ticketNumber = generateTicketNumber()
 
   const status =
     parsed.confidence_score >= 95
       ? 'OPEN'
       : 'NEEDS_REVIEW'
-
-  /* ===============================
-     PERSISTENCE (SOURCE OF TRUTH)
-  ================================ */
 
   await insertTicket({
     ticket_number: ticketNumber,
@@ -105,24 +83,23 @@ export async function createTicket(parsed, rawEmail) {
     source: 'EMAIL',
   })
 
-  /* ===============================
-     SIDE EFFECTS (NON-BLOCKING)
-     🔥 EMAIL MUST NEVER BLOCK
-  ================================ */
-
   sendTicketConfirmation({
     toEmail: senderEmail,
     ticketNumber,
   }).catch(err => {
-    console.error('[EMAIL:TICKET_CONFIRMATION]', {
-      ticketNumber,
-      message: err.message,
-    })
+    console.error('[EMAIL:TICKET_CONFIRMATION]', { ticketNumber, message: err.message })
   })
 
-  /* ===============================
-     RESULT
-  ================================ */
+  if (status === 'NEEDS_REVIEW') {
+    const missingDetails = deriveMissingDetails(parsed)
+    sendMissingDetailsEmail({
+      toEmail: senderEmail,
+      ticketNumber,
+      missingDetails,
+    }).catch(err => {
+      console.error('[EMAIL:MISSING_DETAILS]', { ticketNumber, message: err.message })
+    })
+  }
 
   return {
     ticketNumber,
