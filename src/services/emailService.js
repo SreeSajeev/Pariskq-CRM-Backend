@@ -125,6 +125,54 @@ Pariskq Operations Team
 
 
 /* =====================================================
+   FE ACTION TOKEN EMAIL (ON_SITE / RESOLUTION)
+===================================================== */
+export async function sendFETokenEmail({ feId, ticketNumber, token, type }) {
+  try {
+    if (!feId || !ticketNumber || !token) {
+      console.error("[FE TOKEN EMAIL] Missing feId, ticketNumber, or token");
+      return;
+    }
+
+    const { data: fe, error } = await supabase
+      .from("field_executives")
+      .select("email, name")
+      .eq("id", feId)
+      .single();
+
+    if (error || !fe?.email) {
+      console.error("[FE TOKEN EMAIL] FE not found or no email:", feId);
+      return;
+    }
+
+    const actionLabel = type === "RESOLUTION" ? "Resolution" : "On-Site";
+    const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || "";
+    const actionUrl = baseUrl ? `${baseUrl.replace(/\/$/, "")}/fe/action/${token}` : `#/fe/action/${token}`;
+
+    await sendEmail(
+      {
+        From: process.env.FROM_EMAIL,
+        To: fe.email,
+        Subject: `${actionLabel} proof required — ${ticketNumber}`,
+        TextBody: `
+Hello ${fe.name || ""},
+
+Please submit your ${actionLabel.toLowerCase()} proof for Ticket ${ticketNumber}.
+
+Link: ${actionUrl}
+
+Thank you,
+Pariskq Operations Team
+        `.trim(),
+      },
+      "FE_TOKEN_EMAIL"
+    );
+  } catch (err) {
+    console.error("[FE TOKEN EMAIL ERROR]", err.message);
+  }
+}
+
+/* =====================================================
    3️⃣ CLIENT RESOLUTION EMAIL (IDEMPOTENT)
 ===================================================== */
 export async function sendClientResolutionEmail({

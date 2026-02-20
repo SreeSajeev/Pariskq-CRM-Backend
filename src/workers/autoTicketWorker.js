@@ -293,10 +293,13 @@ export async function runAutoTicketWorker() {
         const existing = await findTicketByComplaintId(parsed.complaint_id);
 
         if (existing) {
-          await addEmailComment(
+          const { error: commentError } = await addEmailComment(
             existing.id,
             parsed.remarks || raw.subject
           );
+          if (commentError) {
+            console.error(`❌ addEmailComment failed for ticket ${existing.id}`, commentError.message);
+          }
 
           await updateRawEmailStatus(raw.id, 'COMMENT_ADDED', {
             linked_ticket_id: existing.id,

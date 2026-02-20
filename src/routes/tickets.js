@@ -5,10 +5,10 @@ import { supabase } from "../supabaseClient.js";
 
 
 import { createActionToken } from "../services/tokenService.js";
-import { 
-  
+import {
   sendResolutionEmail,
-  sendFEAssignmentEmail
+  sendFEAssignmentEmail,
+  sendFETokenEmail,
 } from "../services/emailService.js";
 
 

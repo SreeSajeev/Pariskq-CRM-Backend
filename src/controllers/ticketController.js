@@ -231,10 +231,7 @@ export async function verifyAndCloseTicket(req, res) {
 
     if (updateError) throw updateError;
 
-    await handleClientResolutionNotification({
-      toEmail: ticket.opened_by_email,
-      ticketNumber: ticket.ticket_number,
-    });
+    await handleClientResolutionNotification(ticketId);
 
     return res.json({ success: true });
   } catch (err) {

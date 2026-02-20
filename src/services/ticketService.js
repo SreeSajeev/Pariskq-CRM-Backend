@@ -43,6 +43,12 @@ export async function createTicket(parsed, rawEmail) {
     throw err
   }
 
+  if (!rawEmail || typeof rawEmail !== 'object') {
+    const err = new Error('Missing or invalid raw email in createTicket')
+    err.code = 'RAW_EMAIL_MISSING'
+    throw err
+  }
+
   if (parsed.confidence_score == null) {
     const err = new Error('Parsed email missing confidence_score')
     err.code = 'CONFIDENCE_SCORE_MISSING'
