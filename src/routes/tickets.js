@@ -2,14 +2,13 @@
 
 import express from "express";
 import { supabase } from "../supabaseClient.js";
-
-
 import { createActionToken } from "../services/tokenService.js";
 import {
   sendResolutionEmail,
   sendFEAssignmentEmail,
   sendFETokenEmail,
 } from "../services/emailService.js";
+import { setAssignmentDeadline, setOnsiteDeadline } from "../services/slaService.js";
 
 
 const router = express.Router();
@@ -79,11 +78,15 @@ router.post("/:id/assign", async (req, res) => {
         current_assignment_id: assignment?.id || null,
       })
       .eq("id", ticketId);
-// 🔥 Send basic assignment email
-sendFEAssignmentEmail({
-  feId,
-  ticketNumber: ticket.ticket_number,
-}).catch(console.error);
+
+    setAssignmentDeadline(ticketId).catch((err) =>
+      console.error("[SLA] setAssignmentDeadline after assign", ticketId, err.message)
+    );
+
+    sendFEAssignmentEmail({
+      feId,
+      ticketNumber: ticket.ticket_number,
+    }).catch(console.error);
 
     // Always create ON_SITE token
     const token = await createActionToken({
@@ -151,6 +154,10 @@ router.post("/:id/on-site-token", async (req, res) => {
       .from("tickets")
       .update({ status: "ON_SITE" })
       .eq("id", ticketId);
+
+    setOnsiteDeadline(ticketId).catch((err) =>
+      console.error("[SLA] setOnsiteDeadline after on-site-token", ticketId, err.message)
+    );
 
     return res.json({
       success: true,

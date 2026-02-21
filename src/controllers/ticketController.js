@@ -7,6 +7,7 @@ import { assertValidTransition } from "../services/ticketStateMachine.js";
 import { createActionToken } from "../services/tokenService.js";
 import { sendFETokenEmail } from "../services/emailService.js";
 import { handleClientResolutionNotification } from "../services/clientNotificationService.js";
+import { setAssignmentDeadline } from "../services/slaService.js";
 
 /* =====================================================
    ASSIGN FE TO TICKET
@@ -43,6 +44,10 @@ export async function assignFieldExecutive(req, res) {
       .eq("id", ticketId);
 
     if (updateError) throw updateError;
+
+    setAssignmentDeadline(ticketId).catch((err) =>
+      console.error("[SLA] setAssignmentDeadline after assign", ticketId, err.message)
+    );
 
     return res.json({ success: true });
   } catch (err) {

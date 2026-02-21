@@ -3,6 +3,7 @@
 import { generateTicketNumber } from '../utils/ticketNumber.js'
 import { insertTicket } from '../repositories/ticketsRepo.js'
 import { sendTicketConfirmation, sendMissingDetailsEmail } from './emailService.js'
+import { createSlaRow } from './slaService.js'
 
 function deriveMissingDetails(parsed) {
   if (!parsed || typeof parsed !== 'object') return [];
@@ -59,6 +60,12 @@ export function mergeParsedIntoTicket(ticketRow, parsedReply) {
   return out;
 }
 
+function resolveClientSlug(email) {
+  if (!email) return null;
+  if (String(email).toLowerCase().includes('hitachi')) return 'hitachi';
+  return null;
+}
+
 export async function createTicket(parsed, rawEmail, options = {}) {
   if (!parsed) {
     const err = new Error('Parsed email is null in createTicket')
@@ -87,8 +94,9 @@ export async function createTicket(parsed, rawEmail, options = {}) {
   const requiredComplete = options.requiredComplete === true
   const ticketNumber = generateTicketNumber()
   const status = requiredComplete ? 'OPEN' : 'NEEDS_REVIEW'
+  const clientSlug = resolveClientSlug(senderEmail)
 
-  await insertTicket({
+  const inserted = await insertTicket({
     ticket_number: ticketNumber,
     status,
     complaint_id: parsed.complaint_id,
@@ -101,7 +109,12 @@ export async function createTicket(parsed, rawEmail, options = {}) {
     confidence_score: parsed.confidence_score,
     needs_review: parsed.needs_review,
     source: 'EMAIL',
+    client_slug: clientSlug,
   })
+
+  createSlaRow(inserted.id).catch((err) =>
+    console.error('[SLA] createSlaRow after createTicket', inserted.id, err.message)
+  )
 
   if (status === 'NEEDS_REVIEW') {
     const missingDetails = deriveMissingDetails(parsed)

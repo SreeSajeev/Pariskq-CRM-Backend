@@ -7,6 +7,7 @@ import bodyParser from "body-parser";
 
 import { supabase } from "./supabaseClient.js";
 import { runAutoTicketWorker } from "./workers/autoTicketWorker.js";
+import { evaluateBreaches } from "./services/slaService.js";
 
 import { sendResolutionEmail } from "./services/emailService.js";
 import ticketsRouter from "./routes/tickets.js";
@@ -193,6 +194,14 @@ async function startWorkerLoop() {
   }, 60_000);
 }
 
+function startSlaBreachEvaluator() {
+  console.log("⚡ SLA breach evaluator starting (every 60s)");
+  evaluateBreaches().catch((err) => console.error("[SLA] evaluateBreaches startup failed", err));
+  setInterval(() => {
+    evaluateBreaches().catch((err) => console.error("[SLA] evaluateBreaches interval failed", err));
+  }, 60_000);
+}
+
 /* ======================================================
    SERVER START
 ====================================================== */
@@ -200,4 +209,5 @@ async function startWorkerLoop() {
 app.listen(PORT, () => {
   console.log(`🚀 Backend running on port ${PORT}`);
   startWorkerLoop();
+  startSlaBreachEvaluator();
 });

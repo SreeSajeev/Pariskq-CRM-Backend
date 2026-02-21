@@ -1,5 +1,6 @@
 // src/controllers/proofController.js
 import { supabase } from "../supabaseClient.js";
+import { setOnsiteDeadline, setResolutionDeadline } from "../services/slaService.js";
 
 export async function uploadFeProof(req, res) {
   try {
@@ -65,6 +66,16 @@ export async function uploadFeProof(req, res) {
 
     if (updateError) {
       console.error("Status Update Error:", updateError);
+    }
+
+    if (nextStatus === "ON_SITE") {
+      setOnsiteDeadline(ticketId).catch((err) =>
+        console.error("[SLA] setOnsiteDeadline after proof", ticketId, err.message)
+      );
+    } else if (nextStatus === "RESOLVED_PENDING_VERIFICATION") {
+      setResolutionDeadline(ticketId).catch((err) =>
+        console.error("[SLA] setResolutionDeadline after proof", ticketId, err.message)
+      );
     }
 
     /* =====================================================
