@@ -12,6 +12,7 @@ import { evaluateBreaches } from "./services/slaService.js";
 import { sendResolutionEmail } from "./services/emailService.js";
 import ticketsRouter from "./routes/tickets.js";
 import feActionsRouter from "./routes/feActions.js";
+import adminUsersRouter from "./routes/adminUsers.js";
 import { uploadFeProof } from "./controllers/proofController.js";
 
 const app = express();
@@ -49,6 +50,9 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 // Tickets
 app.use("/tickets", ticketsRouter);
+
+// Admin: user status (activation/deactivation)
+app.use("/admin/users", adminUsersRouter);
 
 // FE token validation routes
 app.use(feActionsRouter);
