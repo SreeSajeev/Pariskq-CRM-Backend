@@ -232,25 +232,33 @@ Pariskq Operations Team
 export async function sendClientResolutionEmail({
   toEmail,
   ticketNumber,
+  verificationRemarks = null,
 }) {
   if (!isValidToEmail(toEmail)) return;
   if (!isValidTicketNumber(ticketNumber)) return;
 
   try {
     const subjectTag = generateTicketSubjectTag(ticketNumber);
-    await sendEmail(
-      {
-        From: process.env.FROM_EMAIL,
-        To: toEmail.trim(),
-        Subject: `Ticket Resolved - ${subjectTag}`,
-        TextBody: `
+    let textBody = `
 Your ticket ${ticketNumber} has been successfully resolved.
 
 If you have further issues, feel free to raise a new ticket.
 
 Thank you,
 Pariskq Operations Team
-      `.trim(),
+    `.trim();
+    if (
+      verificationRemarks != null &&
+      String(verificationRemarks).trim() !== ""
+    ) {
+      textBody += `\n\nStaff Verification Notes:\n${String(verificationRemarks).trim()}`;
+    }
+    await sendEmail(
+      {
+        From: process.env.FROM_EMAIL,
+        To: toEmail.trim(),
+        Subject: `Ticket Resolved - ${subjectTag}`,
+        TextBody: textBody,
       },
       "CLIENT_RESOLUTION"
     );

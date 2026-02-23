@@ -175,19 +175,52 @@ router.post("/:id/on-site-token", async (req, res) => {
 ====================================================== */
 router.post("/:id/close", async (req, res) => {
   const ticketId = req.params.id;
+  const { verification_remarks } = req.body || {};
+
+  const remarksValue =
+    verification_remarks != null && String(verification_remarks).trim() !== ""
+      ? String(verification_remarks).trim()
+      : null;
 
   try {
-    const { data: ticket, error } = await supabase
+    let updatePayload = {
+      status: "RESOLVED",
+      resolved_at: new Date(),
+      verification_remarks: remarksValue,
+    };
+
+    let { data: ticket, error } = await supabase
       .from("tickets")
-      .update({
-        status: "RESOLVED",
-        resolved_at: new Date(),
-      })
+      .update(updatePayload)
       .eq("id", ticketId)
       .select("ticket_number, opened_by_email")
       .single();
 
-    if (error || !ticket) {
+    if (error) {
+      const isColumnError =
+        error.code === "42703" ||
+        (error.message && /verification_remarks|column/.test(error.message));
+      if (isColumnError) {
+        updatePayload = {
+          status: "RESOLVED",
+          resolved_at: new Date(),
+        };
+        const retry = await supabase
+          .from("tickets")
+          .update(updatePayload)
+          .eq("id", ticketId)
+          .select("ticket_number, opened_by_email")
+          .single();
+        if (retry.error || !retry.data) {
+          return res.status(404).json({ error: "Ticket not found" });
+        }
+        ticket = retry.data;
+      } else {
+        return res.status(404).json({ error: "Ticket not found" });
+      }
+    }
+
+    if (!ticket) {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
@@ -195,11 +228,11 @@ router.post("/:id/close", async (req, res) => {
       await sendResolutionEmail({
         toEmail: ticket.opened_by_email,
         ticketNumber: ticket.ticket_number,
+        verificationRemarks: remarksValue,
       });
     }
 
     return res.json({ success: true });
-
   } catch (err) {
     console.error("[CLOSE ROUTE ERROR]", err);
     return res.status(500).json({ error: err.message });

@@ -22,11 +22,16 @@ const PORT = process.env.PORT || 3000;
 ====================================================== */
 
 // ✅ Proper CORS configuration (Express 5 safe)
+// Include Vite dev ports so frontend (e.g. localhost:8080) can call backend (e.g. localhost:3000)
 app.use(
   cors({
     origin: [
       "https://opsxbypariskq.vercel.app",
       "http://localhost:3000",
+      "http://localhost:8080",
+      "http://localhost:5173",
+      "http://127.0.0.1:8080",
+      "http://127.0.0.1:5173",
     ],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
