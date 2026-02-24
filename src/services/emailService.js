@@ -22,6 +22,13 @@ function generateTicketSubjectTag(ticketNumber) {
   return `[Ticket ID: ${String(ticketNumber).trim()}]`;
 }
 
+/** For email body detail lines: null/undefined/empty -> "Not provided" */
+function formatDetail(value) {
+  if (value == null) return "Not provided";
+  const s = String(value).trim();
+  return s === "" ? "Not provided" : s;
+}
+
 async function sendEmail(payload, tag) {
   if (!canSendEmail()) {
     console.warn(`[EMAIL SKIPPED] ${tag} — env not configured`);
@@ -47,25 +54,48 @@ async function sendEmail(payload, tag) {
   }
 }
 
-export async function sendTicketConfirmation({ toEmail, ticketNumber }) {
+export async function sendTicketConfirmation({
+  toEmail,
+  ticketNumber,
+  complaintId = null,
+  vehicleNumber = null,
+  category = null,
+  issueType = null,
+  location = null,
+}) {
   if (!isValidToEmail(toEmail)) return;
   if (!isValidTicketNumber(ticketNumber)) return;
 
   try {
     const subjectTag = generateTicketSubjectTag(ticketNumber);
-    await sendEmail(
-      {
-        From: process.env.FROM_EMAIL,
-        To: toEmail.trim(),
-        Subject: `Complaint Received - ${subjectTag}`,
-        TextBody: `
+    const detailsBlock = `
+Ticket Details:
+---------------------------------
+Complaint ID: ${formatDetail(complaintId)}
+Vehicle Number: ${formatDetail(vehicleNumber)}
+Category: ${formatDetail(category)}
+Issue Type: ${formatDetail(issueType)}
+Location: ${formatDetail(location)}
+---------------------------------
+`.trim();
+
+    const textBody = `
 Your ticket ${ticketNumber} has been successfully created.
+
+${detailsBlock}
 
 Our operations team will review it shortly.
 
 Thank you,
 Pariskq Operations Team
-      `.trim(),
+    `.trim();
+
+    await sendEmail(
+      {
+        From: process.env.FROM_EMAIL,
+        To: toEmail.trim(),
+        Subject: `Complaint Received - ${subjectTag}`,
+        TextBody: textBody,
       },
       "TICKET_CONFIRMATION"
     );
@@ -233,20 +263,44 @@ export async function sendClientResolutionEmail({
   toEmail,
   ticketNumber,
   verificationRemarks = null,
+  resolutionCategory = null,
+  complaintId = null,
+  vehicleNumber = null,
+  category = null,
+  issueType = null,
+  location = null,
 }) {
   if (!isValidToEmail(toEmail)) return;
   if (!isValidTicketNumber(ticketNumber)) return;
 
   try {
     const subjectTag = generateTicketSubjectTag(ticketNumber);
+    const detailsBlock = `
+Ticket Details:
+---------------------------------
+Complaint ID: ${formatDetail(complaintId)}
+Vehicle Number: ${formatDetail(vehicleNumber)}
+Category: ${formatDetail(category)}
+Issue Type: ${formatDetail(issueType)}
+Location: ${formatDetail(location)}
+---------------------------------
+`.trim();
+
     let textBody = `
 Your ticket ${ticketNumber} has been successfully resolved.
+
+${detailsBlock}
 
 If you have further issues, feel free to raise a new ticket.
 
 Thank you,
 Pariskq Operations Team
     `.trim();
+    const hasResolutionCategory =
+      resolutionCategory != null && String(resolutionCategory).trim() !== "";
+    if (hasResolutionCategory) {
+      textBody += `\n\nResolution Category:\n${String(resolutionCategory).trim()}`;
+    }
     if (
       verificationRemarks != null &&
       String(verificationRemarks).trim() !== ""

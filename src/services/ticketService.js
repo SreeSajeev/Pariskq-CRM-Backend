@@ -136,6 +136,11 @@ export async function createTicket(parsed, rawEmail, options = {}) {
     sendTicketConfirmation({
       toEmail: senderEmail,
       ticketNumber,
+      complaintId: parsed.complaint_id,
+      vehicleNumber: parsed.vehicle_number,
+      category: parsed.category,
+      issueType: parsed.issue_type,
+      location: parsed.location,
     }).catch(err => {
       console.error('[EMAIL:TICKET_CONFIRMATION]', { ticketNumber, message: err.message })
     })

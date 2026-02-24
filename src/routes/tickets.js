@@ -175,11 +175,15 @@ router.post("/:id/on-site-token", async (req, res) => {
 ====================================================== */
 router.post("/:id/close", async (req, res) => {
   const ticketId = req.params.id;
-  const { verification_remarks } = req.body || {};
+  const { verification_remarks, resolution_category } = req.body || {};
 
   const remarksValue =
     verification_remarks != null && String(verification_remarks).trim() !== ""
       ? String(verification_remarks).trim()
+      : null;
+  const resolutionCategoryValue =
+    resolution_category != null && String(resolution_category).trim() !== ""
+      ? String(resolution_category).trim()
       : null;
 
   try {
@@ -189,17 +193,18 @@ router.post("/:id/close", async (req, res) => {
       verification_remarks: remarksValue,
     };
 
+    const selectFields = "ticket_number, opened_by_email, complaint_id, vehicle_number, category, issue_type, location";
     let { data: ticket, error } = await supabase
       .from("tickets")
       .update(updatePayload)
       .eq("id", ticketId)
-      .select("ticket_number, opened_by_email")
+      .select(selectFields)
       .single();
 
     if (error) {
       const isColumnError =
         error.code === "42703" ||
-        (error.message && /verification_remarks|column/.test(error.message));
+        (error.message && /verification_remarks|column|resolved_at/.test(error.message));
       if (isColumnError) {
         updatePayload = {
           status: "RESOLVED",
@@ -209,7 +214,7 @@ router.post("/:id/close", async (req, res) => {
           .from("tickets")
           .update(updatePayload)
           .eq("id", ticketId)
-          .select("ticket_number, opened_by_email")
+          .select(selectFields)
           .single();
         if (retry.error || !retry.data) {
           return res.status(404).json({ error: "Ticket not found" });
@@ -229,6 +234,12 @@ router.post("/:id/close", async (req, res) => {
         toEmail: ticket.opened_by_email,
         ticketNumber: ticket.ticket_number,
         verificationRemarks: remarksValue,
+        resolutionCategory: resolutionCategoryValue,
+        complaintId: ticket.complaint_id ?? null,
+        vehicleNumber: ticket.vehicle_number ?? null,
+        category: ticket.category ?? null,
+        issueType: ticket.issue_type ?? null,
+        location: ticket.location ?? null,
       });
     }
 
