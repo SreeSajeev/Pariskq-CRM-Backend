@@ -142,6 +142,28 @@ export async function setResolutionDeadline(ticketId) {
 }
 
 /**
+ * Clear onsite_deadline and resolution_deadline (e.g. when ticket moves to FE_ATTEMPT_FAILED).
+ * Does not delete the sla_tracking row.
+ */
+export async function clearOnsiteAndResolutionDeadlines(ticketId) {
+  if (!ticketId) return;
+  const { error } = await supabase
+    .from("sla_tracking")
+    .update({
+      onsite_deadline: null,
+      resolution_deadline: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("ticket_id", ticketId);
+
+  if (error) {
+    console.error("[SLA] clearOnsiteAndResolutionDeadlines failed:", ticketId, error.message);
+    return;
+  }
+  console.log("[SLA] clearOnsiteAndResolutionDeadlines ok", { ticket_id: ticketId });
+}
+
+/**
  * Evaluate breach flags for all sla_tracking rows. Do not block ticket lifecycle.
  * - assignment_breached: ticket still ASSIGNED and now() > assignment_deadline
  * - onsite_breached: ticket still ON_SITE and now() > onsite_deadline
