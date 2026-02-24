@@ -39,7 +39,7 @@ router.get("/", async (_req, res) => {
 ====================================================== */
 router.post("/:id/assign", async (req, res) => {
   const ticketId = req.params.id;
-  const { feId } = req.body;
+  const { feId, override_reason } = req.body || {};
 
   if (!feId) {
     return res.status(400).json({ error: "feId is required" });
@@ -62,6 +62,10 @@ router.post("/:id/assign", async (req, res) => {
       .insert({
         ticket_id: ticketId,
         fe_id: feId,
+        override_reason:
+          override_reason != null && String(override_reason).trim() !== ""
+            ? String(override_reason).trim()
+            : null,
       })
       .select()
       .single();

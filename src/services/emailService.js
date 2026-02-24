@@ -232,8 +232,8 @@ export async function sendFETokenEmail({ feId, ticketNumber, token, type }) {
     }
 
     const actionLabel = type === "RESOLUTION" ? "Resolution" : "On-Site";
-    const baseUrl = process.env.APP_URL || process.env.FRONTEND_URL || "";
-    const actionUrl = baseUrl ? `${baseUrl.replace(/\/$/, "")}/fe/action/${token}` : `#/fe/action/${token}`;
+    const baseUrl = (process.env.APP_URL || process.env.FRONTEND_URL || "https://opsxbypariskq.vercel.app").replace(/\/$/, "");
+    const actionUrl = `${baseUrl}/fe/action/${token}`;
     const subjectTag = generateTicketSubjectTag(ticketNumber);
 
     await sendEmail(
