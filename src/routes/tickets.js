@@ -9,6 +9,7 @@ import {
   sendFETokenEmail,
 } from "../services/emailService.js";
 import { setAssignmentDeadline, setOnsiteDeadline } from "../services/slaService.js";
+import { sendFESms } from "../services/smsService.js";
 
 
 const router = express.Router();
@@ -106,6 +107,30 @@ router.post("/:id/assign", async (req, res) => {
       token,
       type: "ON_SITE",
     }).catch(console.error);
+
+    // SMS only on first assignment when fe.phone exists; do not block assignment on failure
+    const { count: assignmentCount } = await supabase
+      .from("ticket_assignments")
+      .select("*", { count: "exact", head: true })
+      .eq("ticket_id", ticketId);
+    const isFirstAssignment = (assignmentCount ?? 0) <= 1;
+    if (isFirstAssignment) {
+      const { data: fe } = await supabase
+        .from("field_executives")
+        .select("phone")
+        .eq("id", feId)
+        .maybeSingle();
+      if (fe?.phone != null && String(fe.phone).trim() !== "") {
+        try {
+          await sendFESms({
+            phoneNumber: fe.phone,
+            message: `Ticket ${ticket.ticket_number} assigned. On-site token: ${token}`,
+          });
+        } catch (err) {
+          console.error("[SMS] Failed:", err?.message || err);
+        }
+      }
+    }
 
     return res.json({
       success: true,

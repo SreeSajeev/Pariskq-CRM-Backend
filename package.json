@@ -13,6 +13,7 @@
   "description": "PariskQ CRM backend – email to ticket automation",
   "dependencies": {
     "@supabase/supabase-js": "^2.89.0",
+    "axios": "^1.13.5",
     "body-parser": "^2.2.2",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
