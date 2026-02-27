@@ -105,7 +105,12 @@ export async function runAutoTicketWorker() {
   const { data: rawEmails, error } = await fetchPendingRawEmails();
 
   if (error) {
-    console.error('Failed to fetch pending raw emails:', error.message);
+    const msg = error.message || '';
+    if (msg.includes('525') || msg.includes('SSL handshake') || msg.trimStart().startsWith('<!')) {
+      console.error('Failed to fetch pending raw emails: Supabase unreachable (e.g. 525 SSL handshake). Check network and status.supabase.com');
+    } else {
+      console.error('Failed to fetch pending raw emails:', msg);
+    }
     return;
   }
 

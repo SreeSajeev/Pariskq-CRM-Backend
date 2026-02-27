@@ -14,6 +14,8 @@ import ticketsRouter from "./routes/tickets.js";
 import feActionsRouter from "./routes/feActions.js";
 import adminUsersRouter from "./routes/adminUsers.js";
 import { uploadFeProof } from "./controllers/proofController.js";
+import { createActionToken } from "./services/tokenService.js";
+import { sendFESms, buildFEActionURL } from "./services/smsService.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -53,6 +55,60 @@ app.use("/tickets", ticketsRouter);
 
 // Admin: user status (activation/deactivation)
 app.use("/admin/users", adminUsersRouter);
+
+// Admin: test FE SMS (generate token + send SMS without full assignment)
+app.post("/admin/test-fe-sms", async (req, res) => {
+  try {
+    const { fe_id: feId, ticket_id: ticketId } = req.body || {};
+    if (!feId || !ticketId) {
+      return res.status(400).json({ error: "fe_id and ticket_id required" });
+    }
+    const { data: fe, error: feError } = await supabase
+      .from("field_executives")
+      .select("name, phone")
+      .eq("id", feId)
+      .single();
+    if (feError || !fe) {
+      return res.status(404).json({ error: "Field executive not found" });
+    }
+    if (!fe.phone || !String(fe.phone).trim()) {
+      return res.status(400).json({ error: "FE has no phone number" });
+    }
+    const { data: ticket, error: ticketError } = await supabase
+      .from("tickets")
+      .select("ticket_number")
+      .eq("id", ticketId)
+      .single();
+    if (ticketError || !ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+    const token = await createActionToken({
+      ticketId,
+      feId,
+      actionType: "ON_SITE",
+    });
+    const actionUrl = buildFEActionURL(token);
+    const feName = (fe.name && String(fe.name).trim()) ? String(fe.name).trim() : "Field Executive";
+    const smsMessage = `${feName},
+Ticket ID: ${ticket.ticket_number}
+
+On-Site Action:
+${actionUrl}
+
+- Pariskq IoT Support Team`;
+    const sent = await sendFESms({ phoneNumber: fe.phone, message: smsMessage });
+    return res.json({
+      success: sent,
+      message: sent ? "SMS sent" : "SMS send failed (check logs)",
+      fe_name: fe.name,
+      ticket_number: ticket.ticket_number,
+      action_url: actionUrl,
+    });
+  } catch (err) {
+    console.error("[admin/test-fe-sms]", err?.message || err);
+    return res.status(500).json({ error: err?.message || "Server error" });
+  }
+});
 
 // FE token validation routes
 app.use(feActionsRouter);

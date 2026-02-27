@@ -9,7 +9,7 @@ import {
   sendFETokenEmail,
 } from "../services/emailService.js";
 import { setAssignmentDeadline, setOnsiteDeadline } from "../services/slaService.js";
-import { sendFESms } from "../services/smsService.js";
+import { sendFESms, buildFEActionURL } from "../services/smsService.js";
 
 
 const router = express.Router();
@@ -108,7 +108,7 @@ router.post("/:id/assign", async (req, res) => {
       type: "ON_SITE",
     }).catch(console.error);
 
-    // SMS only on first assignment when fe.phone exists; do not block assignment on failure
+    // SMS only on first assignment when FE has valid phone; do not block assignment on failure
     const { count: assignmentCount } = await supabase
       .from("ticket_assignments")
       .select("*", { count: "exact", head: true })
@@ -117,15 +117,21 @@ router.post("/:id/assign", async (req, res) => {
     if (isFirstAssignment) {
       const { data: fe } = await supabase
         .from("field_executives")
-        .select("phone")
+        .select("name, phone")
         .eq("id", feId)
         .maybeSingle();
       if (fe?.phone != null && String(fe.phone).trim() !== "") {
+        const actionUrl = buildFEActionURL(token);
+        const feName = (fe.name && String(fe.name).trim()) ? String(fe.name).trim() : "Field Executive";
+        const smsMessage = `${feName},
+Ticket ID: ${ticket.ticket_number}
+
+On-Site Action:
+${actionUrl}
+
+- Pariskq IoT Support Team`;
         try {
-          await sendFESms({
-            phoneNumber: fe.phone,
-            message: `Ticket ${ticket.ticket_number} assigned. On-site token: ${token}`,
-          });
+          await sendFESms({ phoneNumber: fe.phone, message: smsMessage });
         } catch (err) {
           console.error("[SMS] Failed:", err?.message || err);
         }
@@ -279,6 +285,57 @@ router.post("/:id/close", async (req, res) => {
   }
 });
 
+/* ======================================================
+   COMPLETE REVIEW (Needs Review → 100% confidence)
+   PATCH /tickets/:id/review-complete
+   Body: { category, issue_type, location, vehicle_number?, priority? }
+   Sets: needs_review = false, confidence_score = 100, updated_at = now()
+====================================================== */
+router.patch("/:id/review-complete", async (req, res) => {
+  const ticketId = req.params.id;
+  const { category, issue_type, location, vehicle_number, priority } = req.body || {};
+
+  const cat = category != null ? String(category).trim() : "";
+  const issue = issue_type != null ? String(issue_type).trim() : "";
+  const loc = location != null ? String(location).trim() : "";
+  if (!cat || !issue || !loc) {
+    return res.status(400).json({
+      error: "category, issue_type, and location are required",
+    });
+  }
+
+  try {
+    const { data: ticket, error } = await supabase
+      .from("tickets")
+      .update({
+        category: cat,
+        issue_type: issue,
+        location: loc,
+        vehicle_number:
+          vehicle_number != null && String(vehicle_number).trim() !== ""
+            ? String(vehicle_number).trim()
+            : null,
+        priority: Boolean(priority),
+        needs_review: false,
+        confidence_score: 100,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", ticketId)
+      .select()
+      .single();
+
+    if (error) {
+      return res.status(404).json({ error: error.message || "Ticket not found" });
+    }
+    if (!ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    return res.json(ticket);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 export default router;
 //works
