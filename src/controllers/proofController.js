@@ -147,6 +147,37 @@ export async function uploadFeProof(req, res) {
         .update({ used: true })
         .eq("id", token);
 
+      /* Optional: backup proof to Supabase Storage (does not block; base64 remains in ticket_comments) */
+      const imageBase64 =
+        attachments &&
+        typeof attachments === "object" &&
+        attachments.image_base64;
+      if (imageBase64 && typeof imageBase64 === "string") {
+        try {
+          const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+          const buffer = Buffer.from(base64Data, "base64");
+          const actionType = actionToken.action_type || "RESOLUTION";
+          const filePath = `${ticketId}/${actionType}/${Date.now()}.jpg`;
+          const { error: uploadError } = await supabase.storage
+            .from("fe-proofs")
+            .upload(filePath, buffer, {
+              contentType: "image/jpeg",
+              upsert: false,
+            });
+          if (uploadError) {
+            console.error("[Proof Storage] Upload failed:", uploadError.message);
+          } else {
+            await supabase
+              .from("ticket_assignments")
+              .update({ proof_storage_path: filePath })
+              .eq("id", assignmentId);
+            console.log("📦 Proof uploaded to Supabase:", filePath);
+          }
+        } catch (err) {
+          console.error("[Proof Storage] Failed:", err?.message || err);
+        }
+      }
+
       return res.json({
         success: true,
         nextStatus: "RESOLVED_PENDING_VERIFICATION",

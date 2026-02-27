@@ -8,6 +8,7 @@ import { createActionToken } from "../services/tokenService.js";
 import { sendFETokenEmail } from "../services/emailService.js";
 import { handleClientResolutionNotification } from "../services/clientNotificationService.js";
 import { setAssignmentDeadline } from "../services/slaService.js";
+import { sendFESms, buildFEActionURL } from "../services/smsService.js";
 
 /* =====================================================
    ASSIGN FE TO TICKET
@@ -185,6 +186,36 @@ export async function verifyOnSiteAndIssueResolution(req, res) {
       token,
       type: "RESOLUTION",
     });
+
+    // Optional: Resolution SMS to FE (does not block flow)
+    try {
+      const { data: fe } = await supabase
+        .from("field_executives")
+        .select("name, phone")
+        .eq("id", assignment.fe_id)
+        .maybeSingle();
+
+      if (fe?.phone && String(fe.phone).trim()) {
+        const resolutionUrl = buildFEActionURL(token);
+        const feName =
+          fe.name && String(fe.name).trim()
+            ? String(fe.name).trim()
+            : "Field Executive";
+        const smsMessage = `${feName},
+Ticket ID: ${ticket.ticket_number}
+
+Resolution Action:
+${resolutionUrl}
+
+- Pariskq IoT Support Team`;
+
+        console.log("📩 Sending Resolution SMS to:", fe.phone);
+        console.log("📩 Resolution SMS Body:", smsMessage);
+        await sendFESms({ phoneNumber: fe.phone, message: smsMessage });
+      }
+    } catch (err) {
+      console.error("[Resolution SMS] Failed:", err?.message || err);
+    }
 
     return res.json({ success: true });
   } catch (err) {

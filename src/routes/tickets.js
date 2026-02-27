@@ -156,11 +156,15 @@ router.post("/:id/on-site-token", async (req, res) => {
   const ticketId = req.params.id;
 
   try {
-    const { data: ticket } = await supabase
+    const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
       .select("ticket_number")
       .eq("id", ticketId)
       .single();
+
+    if (ticketError || !ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
 
     const { data: assignment } = await supabase
       .from("ticket_assignments")
@@ -184,6 +188,36 @@ router.post("/:id/on-site-token", async (req, res) => {
       token: resolutionToken,
       type: "RESOLUTION",
     }).catch(console.error);
+
+    // Optional: Resolution SMS to FE (does not block flow)
+    try {
+      const { data: fe } = await supabase
+        .from("field_executives")
+        .select("name, phone")
+        .eq("id", assignment.fe_id)
+        .maybeSingle();
+
+      if (fe?.phone && String(fe.phone).trim()) {
+        const resolutionUrl = buildFEActionURL(resolutionToken);
+        const feName =
+          fe.name && String(fe.name).trim()
+            ? String(fe.name).trim()
+            : "Field Executive";
+        const smsMessage = `${feName},
+Ticket ID: ${ticket?.ticket_number || "DEMO"}
+
+Resolution Action:
+${resolutionUrl}
+
+- Pariskq IoT Support Team`;
+
+        console.log("📩 Sending Resolution SMS to:", fe.phone);
+        console.log("📩 Resolution SMS Body:", smsMessage);
+        await sendFESms({ phoneNumber: fe.phone, message: smsMessage });
+      }
+    } catch (err) {
+      console.error("[Resolution SMS] Failed:", err?.message || err);
+    }
 
     await supabase
       .from("tickets")

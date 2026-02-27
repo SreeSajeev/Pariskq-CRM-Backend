@@ -7,6 +7,7 @@ import bodyParser from "body-parser";
 
 import { supabase } from "./supabaseClient.js";
 import { runAutoTicketWorker } from "./workers/autoTicketWorker.js";
+import { processProofBackupQueue } from "./workers/proofBackupQueueProcessor.js";
 import { evaluateBreaches } from "./services/slaService.js";
 
 import { sendResolutionEmail } from "./services/emailService.js";
@@ -106,6 +107,80 @@ ${actionUrl}
     });
   } catch (err) {
     console.error("[admin/test-fe-sms]", err?.message || err);
+    return res.status(500).json({ error: err?.message || "Server error" });
+  }
+});
+
+// Admin: test RESOLUTION SMS (use current assignment + resolution token)
+app.post("/admin/test-resolution-sms", async (req, res) => {
+  try {
+    const { ticket_id: ticketId } = req.body || {};
+    if (!ticketId) {
+      return res.status(400).json({ error: "ticket_id required" });
+    }
+
+    const { data: ticket, error: ticketError } = await supabase
+      .from("tickets")
+      .select("ticket_number")
+      .eq("id", ticketId)
+      .single();
+    if (ticketError || !ticket) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    const { data: assignment, error: assignmentError } = await supabase
+      .from("ticket_assignments")
+      .select("fe_id")
+      .eq("ticket_id", ticketId)
+      .single();
+    if (assignmentError || !assignment) {
+      return res.status(400).json({ error: "FE not assigned" });
+    }
+
+    const { data: fe, error: feError } = await supabase
+      .from("field_executives")
+      .select("name, phone")
+      .eq("id", assignment.fe_id)
+      .single();
+    if (feError || !fe) {
+      return res.status(404).json({ error: "Field executive not found" });
+    }
+    if (!fe.phone || !String(fe.phone).trim()) {
+      return res.status(400).json({ error: "FE has no phone number" });
+    }
+
+    const token = await createActionToken({
+      ticketId,
+      feId: assignment.fe_id,
+      actionType: "RESOLUTION",
+    });
+
+    const resolutionUrl = buildFEActionURL(token);
+    const feName =
+      fe.name && String(fe.name).trim()
+        ? String(fe.name).trim()
+        : "Field Executive";
+    const smsMessage = `${feName},
+Ticket ID: ${ticket.ticket_number}
+
+Resolution Action:
+${resolutionUrl}
+
+- Pariskq IoT Support Team`;
+
+    console.log("📩 Sending Resolution SMS to:", fe.phone);
+    console.log("📩 Resolution SMS Body:", smsMessage);
+    const sent = await sendFESms({ phoneNumber: fe.phone, message: smsMessage });
+
+    return res.json({
+      success: sent,
+      message: sent ? "SMS sent" : "SMS send failed (check logs)",
+      fe_name: fe.name,
+      ticket_number: ticket.ticket_number,
+      resolution_url: resolutionUrl,
+    });
+  } catch (err) {
+    console.error("[admin/test-resolution-sms]", err?.message || err);
     return res.status(500).json({ error: err?.message || "Server error" });
   }
 });
@@ -249,12 +324,22 @@ async function startWorkerLoop() {
   } catch (err) {
     console.error("[WORKER] Startup run failed", err);
   }
+  try {
+    await processProofBackupQueue();
+  } catch (err) {
+    console.error("[WORKER] Proof backup queue startup failed", err);
+  }
 
   setInterval(async () => {
     try {
       await runAutoTicketWorker();
     } catch (err) {
       console.error("[WORKER] Interval run failed", err);
+    }
+    try {
+      await processProofBackupQueue();
+    } catch (err) {
+      console.error("[WORKER] Proof backup queue interval failed", err);
     }
   }, 60_000);
 }
