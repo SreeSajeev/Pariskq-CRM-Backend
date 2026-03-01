@@ -32,9 +32,9 @@ export function sanitizePhoneForSms(phone) {
 
 /**
  * Send SMS to a single number via Fast2SMS bulkV2 (GET with query params).
- * Throws on failure so callers can log exact reason.
+ * Logs errors, does not throw. Assignment must never be affected by SMS failure.
  * @param {{ phoneNumber: string, message: string }} params
- * @returns {Promise<boolean>} true if sent successfully
+ * @returns {Promise<boolean>} true if sent successfully; false on validation/provider/network failure
  */
 export async function sendFESms({ phoneNumber, message }) {
   const rawPhone = phoneNumber != null ? String(phoneNumber).trim() : "";
@@ -46,16 +46,14 @@ export async function sendFESms({ phoneNumber, message }) {
   console.log("[SMS] phone last4=", cleanPhone.length === 10 ? cleanPhone.slice(-4) + "****" : "invalid", "len=", cleanPhone.length);
 
   if (cleanPhone.length !== 10) {
-    const msg = `Invalid or missing 10-digit phone: raw="${rawPhone ? rawPhone.slice(0, 20) + "..." : "(empty)"}"`;
-    console.error("[SMS]", msg);
-    throw new Error(msg);
+    console.error("[SMS] Skipped: invalid or missing 10-digit phone");
+    return false;
   }
 
   const baseUrl = process.env.FAST2SMS_BASE_URL || FAST2SMS_BULK_V2;
   if (!hasKey) {
-    const msg = "FAST2SMS_API_KEY not set";
-    console.error("[SMS]", msg);
-    throw new Error(msg);
+    console.error("[SMS] Failed: FAST2SMS_API_KEY not set");
+    return false;
   }
 
   const route = process.env.FAST2SMS_ROUTE || "q";
@@ -64,6 +62,7 @@ export async function sendFESms({ phoneNumber, message }) {
   console.log("[SMS] Sending to ****" + cleanPhone.slice(-4), "route=", route);
 
   try {
+    console.log(">>> About to call Fast2SMS");
     const { data, status } = await axios.get(baseUrl, {
       params: {
         authorization: key,
@@ -83,13 +82,13 @@ export async function sendFESms({ phoneNumber, message }) {
     }
     const errMsg = (data && (data.message || data.msg)) ? String(data.message || data.msg) : `status ${status}`;
     console.error("[SMS] Provider error:", errMsg);
-    throw new Error(`Fast2SMS failed: ${errMsg}`);
+    return false;
   } catch (err) {
     if (err.response) {
       console.error("[SMS] Provider response status=", err.response.status, "data=", JSON.stringify(err.response.data));
     }
     const errMsg = err?.message || String(err);
     console.error("[SMS] Request failed:", errMsg);
-    throw err instanceof Error ? err : new Error(errMsg);
+    return false;
   }
 }

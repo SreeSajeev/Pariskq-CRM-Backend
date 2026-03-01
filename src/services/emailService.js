@@ -41,10 +41,11 @@ async function sendEmail(payload, tag) {
   if (!canSendEmail()) {
     const msg = `Email not configured: missing POSTMARK_SERVER_TOKEN or FROM_EMAIL`;
     console.error(`[EMAIL SKIPPED] ${tag} — ${msg}`);
-    throw new Error(msg);
+    return;
   }
 
   try {
+    console.log(">>> About to call Postmark");
     const res = await fetch(POSTMARK_URL, {
       method: "POST",
       headers: {
@@ -57,12 +58,11 @@ async function sendEmail(payload, tag) {
     const text = await res.text();
     if (!res.ok) {
       console.error(`[EMAIL FAILED] ${tag} status=${res.status} body=`, text);
-      throw new Error(`Postmark ${tag} failed: ${res.status} ${text}`);
+      return;
     }
     console.log(`[EMAIL SENT] ${tag} To=${payload.To}`);
   } catch (err) {
     console.error(`[EMAIL ERROR] ${tag}`, err.message);
-    throw err;
   }
 }
 
@@ -183,14 +183,12 @@ export async function sendFEAssignmentEmail({
   try {
     console.log("[FE ASSIGN EMAIL] FE lookup feId=", feId, "ticketNumber=", ticketNumber);
     if (!feId) {
-      const msg = "Missing feId";
-      console.error("[FE ASSIGN EMAIL]", msg);
-      throw new Error(msg);
+      console.error("[FE ASSIGN EMAIL] Missing feId");
+      return;
     }
     if (!isValidTicketNumber(ticketNumber)) {
-      const msg = "Invalid ticketNumber";
-      console.error("[FE ASSIGN EMAIL]", msg);
-      throw new Error(msg);
+      console.error("[FE ASSIGN EMAIL] Invalid ticketNumber");
+      return;
     }
 
     const { data: fe, error } = await supabase
@@ -200,9 +198,8 @@ export async function sendFEAssignmentEmail({
       .single();
 
     if (error || !fe?.email) {
-      const msg = `FE email not found feId=${feId} error=${error?.message || "no email"}`;
-      console.error("[FE ASSIGN EMAIL]", msg);
-      throw new Error(msg);
+      console.error("[FE ASSIGN EMAIL] FE email not found:", feId, error?.message || "no email");
+      return;
     }
     console.log("[FE ASSIGN EMAIL] FE found email=", fe.email, "name=", fe.name || "(none)");
 
@@ -228,7 +225,6 @@ Pariskq Operations Team
     console.log("[FE ASSIGN EMAIL] Sent to", fe.email);
   } catch (err) {
     console.error("[FE ASSIGN EMAIL ERROR]", err.message);
-    throw err;
   }
 }
 
@@ -236,9 +232,8 @@ export async function sendFETokenEmail({ feId, ticketNumber, token, type }) {
   try {
     console.log("[FE TOKEN EMAIL] FE lookup feId=", feId, "type=", type);
     if (!feId || !isValidTicketNumber(ticketNumber) || !token) {
-      const msg = "Missing feId, ticketNumber, or token";
-      console.error("[FE TOKEN EMAIL]", msg);
-      throw new Error(msg);
+      console.error("[FE TOKEN EMAIL] Missing feId, ticketNumber, or token");
+      return;
     }
 
     const { data: fe, error } = await supabase
@@ -248,9 +243,8 @@ export async function sendFETokenEmail({ feId, ticketNumber, token, type }) {
       .single();
 
     if (error || !fe?.email) {
-      const msg = `FE not found or no email feId=${feId} error=${error?.message || "no email"}`;
-      console.error("[FE TOKEN EMAIL]", msg);
-      throw new Error(msg);
+      console.error("[FE TOKEN EMAIL] FE not found or no email:", feId, error?.message || "no email");
+      return;
     }
     console.log("[FE TOKEN EMAIL] FE found email=", fe.email);
 
@@ -280,7 +274,6 @@ Pariskq Operations Team
     console.log("[FE TOKEN EMAIL] Sent to", fe.email);
   } catch (err) {
     console.error("[FE TOKEN EMAIL ERROR]", err.message);
-    throw err;
   }
 }
 
