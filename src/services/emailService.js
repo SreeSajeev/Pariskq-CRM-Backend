@@ -10,6 +10,13 @@ function canSendEmail() {
   );
 }
 
+/** Temporary: log env presence for debugging (no secret values). */
+function logEmailEnvStatus(tag) {
+  const hasToken = Boolean(process.env.POSTMARK_SERVER_TOKEN && String(process.env.POSTMARK_SERVER_TOKEN).trim());
+  const hasFrom = Boolean(process.env.FROM_EMAIL && String(process.env.FROM_EMAIL).trim());
+  console.log(`[EMAIL ENV] ${tag} — POSTMARK_SERVER_TOKEN=${hasToken ? "set" : "MISSING"}, FROM_EMAIL=${hasFrom ? "set" : "MISSING"}`);
+}
+
 function isValidTicketNumber(ticketNumber) {
   return typeof ticketNumber === "string" && ticketNumber.trim().length > 0;
 }
@@ -30,9 +37,11 @@ function formatDetail(value) {
 }
 
 async function sendEmail(payload, tag) {
+  logEmailEnvStatus(tag);
   if (!canSendEmail()) {
-    console.warn(`[EMAIL SKIPPED] ${tag} — env not configured`);
-    return;
+    const msg = `Email not configured: missing POSTMARK_SERVER_TOKEN or FROM_EMAIL`;
+    console.error(`[EMAIL SKIPPED] ${tag} — ${msg}`);
+    throw new Error(msg);
   }
 
   try {
@@ -45,12 +54,15 @@ async function sendEmail(payload, tag) {
       body: JSON.stringify(payload),
     });
 
+    const text = await res.text();
     if (!res.ok) {
-      const text = await res.text();
-      console.error(`[EMAIL FAILED] ${tag}`, text);
+      console.error(`[EMAIL FAILED] ${tag} status=${res.status} body=`, text);
+      throw new Error(`Postmark ${tag} failed: ${res.status} ${text}`);
     }
+    console.log(`[EMAIL SENT] ${tag} To=${payload.To}`);
   } catch (err) {
     console.error(`[EMAIL ERROR] ${tag}`, err.message);
+    throw err;
   }
 }
 
@@ -169,13 +181,16 @@ export async function sendFEAssignmentEmail({
   ticketNumber,
 }) {
   try {
+    console.log("[FE ASSIGN EMAIL] FE lookup feId=", feId, "ticketNumber=", ticketNumber);
     if (!feId) {
-      console.error("[FE ASSIGN EMAIL] Missing feId");
-      return;
+      const msg = "Missing feId";
+      console.error("[FE ASSIGN EMAIL]", msg);
+      throw new Error(msg);
     }
     if (!isValidTicketNumber(ticketNumber)) {
-      console.error("[FE ASSIGN EMAIL] Invalid ticketNumber");
-      return;
+      const msg = "Invalid ticketNumber";
+      console.error("[FE ASSIGN EMAIL]", msg);
+      throw new Error(msg);
     }
 
     const { data: fe, error } = await supabase
@@ -185,9 +200,11 @@ export async function sendFEAssignmentEmail({
       .single();
 
     if (error || !fe?.email) {
-      console.error("[FE ASSIGN EMAIL] FE email not found:", feId);
-      return;
+      const msg = `FE email not found feId=${feId} error=${error?.message || "no email"}`;
+      console.error("[FE ASSIGN EMAIL]", msg);
+      throw new Error(msg);
     }
+    console.log("[FE ASSIGN EMAIL] FE found email=", fe.email, "name=", fe.name || "(none)");
 
     const subjectTag = generateTicketSubjectTag(ticketNumber);
     await sendEmail(
@@ -208,16 +225,20 @@ Pariskq Operations Team
       },
       "FE_ASSIGNMENT"
     );
+    console.log("[FE ASSIGN EMAIL] Sent to", fe.email);
   } catch (err) {
     console.error("[FE ASSIGN EMAIL ERROR]", err.message);
+    throw err;
   }
 }
 
 export async function sendFETokenEmail({ feId, ticketNumber, token, type }) {
   try {
+    console.log("[FE TOKEN EMAIL] FE lookup feId=", feId, "type=", type);
     if (!feId || !isValidTicketNumber(ticketNumber) || !token) {
-      console.error("[FE TOKEN EMAIL] Missing feId, ticketNumber, or token");
-      return;
+      const msg = "Missing feId, ticketNumber, or token";
+      console.error("[FE TOKEN EMAIL]", msg);
+      throw new Error(msg);
     }
 
     const { data: fe, error } = await supabase
@@ -227,9 +248,11 @@ export async function sendFETokenEmail({ feId, ticketNumber, token, type }) {
       .single();
 
     if (error || !fe?.email) {
-      console.error("[FE TOKEN EMAIL] FE not found or no email:", feId);
-      return;
+      const msg = `FE not found or no email feId=${feId} error=${error?.message || "no email"}`;
+      console.error("[FE TOKEN EMAIL]", msg);
+      throw new Error(msg);
     }
+    console.log("[FE TOKEN EMAIL] FE found email=", fe.email);
 
     const actionLabel = type === "RESOLUTION" ? "Resolution" : "On-Site";
     const baseUrl = (process.env.APP_URL || process.env.FRONTEND_URL || "https://opsxbypariskq.vercel.app").replace(/\/$/, "");
@@ -254,8 +277,10 @@ Pariskq Operations Team
       },
       "FE_TOKEN_EMAIL"
     );
+    console.log("[FE TOKEN EMAIL] Sent to", fe.email);
   } catch (err) {
     console.error("[FE TOKEN EMAIL ERROR]", err.message);
+    throw err;
   }
 }
 

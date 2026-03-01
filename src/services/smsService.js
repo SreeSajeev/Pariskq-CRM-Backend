@@ -32,29 +32,36 @@ export function sanitizePhoneForSms(phone) {
 
 /**
  * Send SMS to a single number via Fast2SMS bulkV2 (GET with query params).
+ * Throws on failure so callers can log exact reason.
  * @param {{ phoneNumber: string, message: string }} params
- * @returns {Promise<boolean>} true if sent successfully; logs errors, does not throw
+ * @returns {Promise<boolean>} true if sent successfully
  */
 export async function sendFESms({ phoneNumber, message }) {
   const rawPhone = phoneNumber != null ? String(phoneNumber).trim() : "";
   const cleanPhone = sanitizePhoneForSms(rawPhone);
+
+  const key = process.env.FAST2SMS_API_KEY;
+  const hasKey = Boolean(key && String(key).trim());
+  console.log("[SMS ENV] FAST2SMS_API_KEY=", hasKey ? "set" : "MISSING");
+  console.log("[SMS] phone last4=", cleanPhone.length === 10 ? cleanPhone.slice(-4) + "****" : "invalid", "len=", cleanPhone.length);
+
   if (cleanPhone.length !== 10) {
-    console.error("[SMS] Skipped: invalid or missing 10-digit phone");
-    return false;
+    const msg = `Invalid or missing 10-digit phone: raw="${rawPhone ? rawPhone.slice(0, 20) + "..." : "(empty)"}"`;
+    console.error("[SMS]", msg);
+    throw new Error(msg);
   }
 
   const baseUrl = process.env.FAST2SMS_BASE_URL || FAST2SMS_BULK_V2;
-  const key = process.env.FAST2SMS_API_KEY;
-  if (!key || !String(key).trim()) {
-    console.error("[SMS] Failed: FAST2SMS_API_KEY not set");
-    return false;
+  if (!hasKey) {
+    const msg = "FAST2SMS_API_KEY not set";
+    console.error("[SMS]", msg);
+    throw new Error(msg);
   }
 
   const route = process.env.FAST2SMS_ROUTE || "q";
   const flash = process.env.FAST2SMS_FLASH != null ? Number(process.env.FAST2SMS_FLASH) : 0;
 
-  console.log("📩 Sending SMS to:", cleanPhone);
-  console.log("📩 SMS Body:", message);
+  console.log("[SMS] Sending to ****" + cleanPhone.slice(-4), "route=", route);
 
   try {
     const { data, status } = await axios.get(baseUrl, {
@@ -68,18 +75,21 @@ export async function sendFESms({ phoneNumber, message }) {
       timeout: 10000,
     });
 
-    console.log("📩 Fast2SMS response:", data);
+    console.log("[SMS] Fast2SMS response status=", status, "body=", JSON.stringify(data));
 
     if (status >= 200 && status < 300) {
       console.log("[SMS] Sent successfully");
       return true;
     }
-    const errMsg = (data && (data.message || data.msg)) || `status ${status}`;
-    console.error("[SMS] Failed:", errMsg);
-    return false;
+    const errMsg = (data && (data.message || data.msg)) ? String(data.message || data.msg) : `status ${status}`;
+    console.error("[SMS] Provider error:", errMsg);
+    throw new Error(`Fast2SMS failed: ${errMsg}`);
   } catch (err) {
+    if (err.response) {
+      console.error("[SMS] Provider response status=", err.response.status, "data=", JSON.stringify(err.response.data));
+    }
     const errMsg = err?.message || String(err);
-    console.error("[SMS] Failed:", errMsg);
-    return false;
+    console.error("[SMS] Request failed:", errMsg);
+    throw err instanceof Error ? err : new Error(errMsg);
   }
 }

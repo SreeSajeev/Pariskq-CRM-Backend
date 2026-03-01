@@ -57,7 +57,7 @@ router.post("/:id/assign", async (req, res) => {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
-    // Insert assignment (ignore duplicates for demo)
+    // Insert assignment
     const { data: assignment, error: assignmentError } = await supabase
       .from("ticket_assignments")
       .insert({
@@ -71,8 +71,11 @@ router.post("/:id/assign", async (req, res) => {
       .select()
       .single();
 
-    if (assignmentError) {
+    if (assignmentError || !assignment) {
       console.error("Assignment insert error:", assignmentError);
+      return res.status(400).json({
+        error: assignmentError?.message ?? "Failed to create assignment. Check that the Field Executive exists and the ticket is not already assigned.",
+      });
     }
 
     // Update ticket state
@@ -80,7 +83,7 @@ router.post("/:id/assign", async (req, res) => {
       .from("tickets")
       .update({
         status: "ASSIGNED",
-        current_assignment_id: assignment?.id || null,
+        current_assignment_id: assignment.id,
       })
       .eq("id", ticketId);
 
@@ -88,10 +91,11 @@ router.post("/:id/assign", async (req, res) => {
       console.error("[SLA] setAssignmentDeadline after assign", ticketId, err.message)
     );
 
+    console.log("[ASSIGN] Sending FE assignment email feId=", feId, "ticketNumber=", ticket.ticket_number);
     sendFEAssignmentEmail({
       feId,
       ticketNumber: ticket.ticket_number,
-    }).catch(console.error);
+    }).catch((e) => console.error("[ASSIGN] FE assignment email failed:", e?.message || e));
 
     // Always create ON_SITE token
     const token = await createActionToken({
@@ -100,13 +104,13 @@ router.post("/:id/assign", async (req, res) => {
       actionType: "ON_SITE",
     });
 
-    // Send email (non-blocking, demo-safe)
+    console.log("[ASSIGN] Sending FE token email feId=", feId, "type=ON_SITE");
     sendFETokenEmail({
       feId,
       ticketNumber: ticket.ticket_number,
       token,
       type: "ON_SITE",
-    }).catch(console.error);
+    }).catch((e) => console.error("[ASSIGN] FE token email failed:", e?.message || e));
 
     // SMS only on first assignment when FE has valid phone; do not block assignment on failure
     const { count: assignmentCount } = await supabase
@@ -114,12 +118,15 @@ router.post("/:id/assign", async (req, res) => {
       .select("*", { count: "exact", head: true })
       .eq("ticket_id", ticketId);
     const isFirstAssignment = (assignmentCount ?? 0) <= 1;
+    console.log("[ASSIGN] SMS branch isFirstAssignment=", isFirstAssignment, "assignmentCount=", assignmentCount ?? 0);
     if (isFirstAssignment) {
-      const { data: fe } = await supabase
+      const { data: fe, error: feErr } = await supabase
         .from("field_executives")
         .select("name, phone")
         .eq("id", feId)
         .maybeSingle();
+      const phonePresent = fe?.phone != null && String(fe.phone).trim() !== "";
+      console.log("[ASSIGN] FE lookup for SMS feId=", feId, "error=", feErr?.message || null, "phonePresent=", phonePresent);
       if (fe?.phone != null && String(fe.phone).trim() !== "") {
         const actionUrl = buildFEActionURL(token);
         const feName = (fe.name && String(fe.name).trim()) ? String(fe.name).trim() : "Field Executive";
@@ -131,11 +138,17 @@ ${actionUrl}
 
 - Pariskq IoT Support Team`;
         try {
+          console.log("[ASSIGN] Sending SMS to FE feId=", feId);
           await sendFESms({ phoneNumber: fe.phone, message: smsMessage });
+          console.log("[ASSIGN] SMS sent successfully");
         } catch (err) {
-          console.error("[SMS] Failed:", err?.message || err);
+          console.error("[ASSIGN] SMS failed:", err?.message || err);
         }
+      } else {
+        console.log("[ASSIGN] SMS skipped: FE has no phone");
       }
+    } else {
+      console.log("[ASSIGN] SMS skipped: not first assignment");
     }
 
     return res.json({
