@@ -66,6 +66,16 @@ async function sendEmail(payload, tag) {
   }
 }
 
+/** Build short issue summary from category, issueType, location; max 200 chars. */
+function buildShortIssueSummary(category, issueType, location) {
+  const parts = [category, issueType, location].filter(
+    (v) => v != null && String(v).trim() !== ""
+  ).map((v) => String(v).trim());
+  if (parts.length === 0) return "Not provided";
+  const summary = parts.join(" · ");
+  return summary.length > 200 ? summary.slice(0, 197) + "..." : summary;
+}
+
 export async function sendTicketConfirmation({
   toEmail,
   ticketNumber,
@@ -79,7 +89,7 @@ export async function sendTicketConfirmation({
   if (!isValidTicketNumber(ticketNumber)) return;
 
   try {
-    const subjectTag = generateTicketSubjectTag(ticketNumber);
+    const shortSummary = buildShortIssueSummary(category, issueType, location);
     const detailsBlock = `
 Ticket Details:
 ---------------------------------
@@ -88,25 +98,29 @@ Vehicle Number: ${formatDetail(vehicleNumber)}
 Category: ${formatDetail(category)}
 Issue Type: ${formatDetail(issueType)}
 Location: ${formatDetail(location)}
+Short issue summary: ${formatDetail(shortSummary)}
 ---------------------------------
 `.trim();
 
-    const textBody = `
-Your ticket ${ticketNumber} has been successfully created.
-
-${detailsBlock}
-
-Our operations team will review it shortly.
-
-Thank you,
-Pariskq Operations Team
-    `.trim();
+    const textBody = [
+      "Hello,",
+      "",
+      `Your ticket ${ticketNumber} has been successfully created.`,
+      "",
+      detailsBlock,
+      "",
+      "If you need to reference this request, please mention the ticket ID above.",
+      "Our operations team will review it shortly.",
+      "",
+      "Thank you,",
+      "Pariskq Operations Team",
+    ].join("\n");
 
     await sendEmail(
       {
         From: process.env.FROM_EMAIL,
         To: toEmail.trim(),
-        Subject: `Complaint Received - ${subjectTag}`,
+        Subject: `Complaint Received - Ticket ${String(ticketNumber).trim()}`,
         TextBody: textBody,
       },
       "TICKET_CONFIRMATION"
