@@ -12,7 +12,7 @@ import {
   updateTicketStatus,
   updateTicketFields,
 } from '../repositories/ticketsRepo.js';
-import { parseEmail, parseEmailFromText, sanitizeParsedLocation } from '../services/parsingService.js';
+import { parseEmail, parseEmailFromText, sanitizeParsedLocation, normalizeParsedTicket } from '../services/parsingService.js';
 import { calculateConfidence } from '../services/confidenceService.js';
 import { addEmailComment } from '../services/commentService.js';
 import { createTicket, hasRequiredFieldsForOpen, countStructuredComplaintFields, mergeParsedIntoTicket } from '../services/ticketService.js';
@@ -143,6 +143,7 @@ export async function runAutoTicketWorker() {
       }
 
       let parsed = parseEmail(raw);
+      parsed = normalizeParsedTicket(parsed, raw);
       parsed = sanitizeParsedLocation(parsed);
 
       if (countStructuredComplaintFields(parsed) < 2) {

@@ -8,6 +8,10 @@ import { getEmailText } from '../utils/emailParser.js'
 
 const SHORT_DESCRIPTION_MAX_LEN = 200;
 
+/** Default organisation for email-created tickets so they appear in All Tickets / Dashboard (tenant filter). */
+const DEFAULT_ORGANISATION_ID =
+  process.env.DEFAULT_ORGANISATION_ID || '00000000-0000-0000-0000-000000000001';
+
 function deriveMissingDetails(parsed) {
   if (!parsed || typeof parsed !== 'object') return [];
   const list = [];
@@ -110,6 +114,7 @@ export async function createTicket(parsed, rawEmail, options = {}) {
   const inserted = await insertTicket({
     ticket_number: ticketNumber,
     status,
+    organisation_id: DEFAULT_ORGANISATION_ID,
     complaint_id: parsed.complaint_id,
     vehicle_number: parsed.vehicle_number,
     category: parsed.category,
