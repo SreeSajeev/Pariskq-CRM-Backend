@@ -12,7 +12,7 @@ import {
   updateTicketStatus,
   updateTicketFields,
 } from '../repositories/ticketsRepo.js';
-import { parseEmail, parseEmailFromText } from '../services/parsingService.js';
+import { parseEmail, parseEmailFromText, sanitizeParsedLocation } from '../services/parsingService.js';
 import { calculateConfidence } from '../services/confidenceService.js';
 import { addEmailComment } from '../services/commentService.js';
 import { createTicket, hasRequiredFieldsForOpen, countStructuredComplaintFields, mergeParsedIntoTicket } from '../services/ticketService.js';
@@ -142,7 +142,8 @@ export async function runAutoTicketWorker() {
         continue;
       }
 
-      const parsed = parseEmail(raw);
+      let parsed = parseEmail(raw);
+      parsed = sanitizeParsedLocation(parsed);
 
       if (countStructuredComplaintFields(parsed) < 2) {
         await updateRawEmailStatus(raw.id, 'IGNORED_INSUFFICIENT_DATA');

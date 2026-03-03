@@ -24,7 +24,7 @@ export async function findTicketByTicketNumber(ticketNumber) {
 
   const { data, error } = await supabase
     .from('tickets')
-    .select('id, status, complaint_id, vehicle_number, category, issue_type, location')
+    .select('id, status, complaint_id, vehicle_number, category, issue_type, location, short_description')
     .eq('ticket_number', trimmed)
     .limit(1)
     .maybeSingle();

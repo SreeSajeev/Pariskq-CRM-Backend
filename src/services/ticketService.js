@@ -4,6 +4,9 @@ import { generateTicketNumber } from '../utils/ticketNumber.js'
 import { insertTicket } from '../repositories/ticketsRepo.js'
 import { sendTicketConfirmation, sendMissingDetailsEmail } from './emailService.js'
 import { createSlaRow } from './slaService.js'
+import { getEmailText } from '../utils/emailParser.js'
+
+const SHORT_DESCRIPTION_MAX_LEN = 200;
 
 function deriveMissingDetails(parsed) {
   if (!parsed || typeof parsed !== 'object') return [];
@@ -42,10 +45,11 @@ export function countStructuredComplaintFields(parsed) {
 
 export function hasRequiredFieldsForOpen(ticket) {
   if (!ticket || typeof ticket !== 'object') return false;
+  const hasIssueInfo = safeHasValue(ticket.issue_type) || safeHasValue(ticket.short_description);
   return (
     safeHasValue(ticket.vehicle_number) &&
-    safeHasValue(ticket.issue_type) &&
-    safeHasValue(ticket.location)
+    safeHasValue(ticket.location) &&
+    hasIssueInfo
   );
 }
 
@@ -96,6 +100,13 @@ export async function createTicket(parsed, rawEmail, options = {}) {
   const status = requiredComplete ? 'OPEN' : 'NEEDS_REVIEW'
   const clientSlug = resolveClientSlug(senderEmail)
 
+  const remarksTrimmed = parsed.remarks != null && String(parsed.remarks).trim() !== ''
+    ? String(parsed.remarks).trim()
+    : ''
+  const shortDescription = remarksTrimmed
+    ? remarksTrimmed.slice(0, SHORT_DESCRIPTION_MAX_LEN)
+    : (getEmailText(rawEmail) || '').replace(/\s+/g, ' ').trim().slice(0, SHORT_DESCRIPTION_MAX_LEN) || null
+
   const inserted = await insertTicket({
     ticket_number: ticketNumber,
     status,
@@ -110,6 +121,7 @@ export async function createTicket(parsed, rawEmail, options = {}) {
     needs_review: parsed.needs_review,
     source: 'EMAIL',
     client_slug: clientSlug,
+    ...(shortDescription ? { short_description: shortDescription } : {}),
   })
 
   createSlaRow(inserted.id).catch((err) =>

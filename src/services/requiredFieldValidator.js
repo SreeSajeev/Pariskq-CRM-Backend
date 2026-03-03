@@ -14,8 +14,9 @@ export function validateRequiredFields(parsedEmail) {
     };
 
     if (!safeGet(parsedEmail, 'vehicle_number')) missing.push('vehicle_number');
-    if (!safeGet(parsedEmail, 'issue_type')) missing.push('issue_type');
     if (!safeGet(parsedEmail, 'location')) missing.push('location');
+    const hasIssueInfo = safeGet(parsedEmail, 'issue_type') || safeGet(parsedEmail, 'remarks');
+    if (!hasIssueInfo) missing.push('issue_type_or_remarks');
 
     return {
       isComplete: missing.length === 0,
@@ -23,6 +24,6 @@ export function validateRequiredFields(parsedEmail) {
     };
   } catch (e) {
     // Never throw — on unexpected error, report all fields missing conservatively
-    return { isComplete: false, missingFields: ['vehicle_number', 'issue_type', 'location'] };
+    return { isComplete: false, missingFields: ['vehicle_number', 'location', 'issue_type_or_remarks'] };
   }
 }

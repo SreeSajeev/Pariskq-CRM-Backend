@@ -97,6 +97,43 @@ export function parseEmail(raw) {
   return result;
 }
 
+/** Max length for location before cap/sentence trim. */
+const LOCATION_MAX_LEN = 120;
+
+/** Trailing phrases that indicate disclaimer/footer; strip from end. */
+const DISCLAIMER_STARTERS = [
+  /^\s*confidentiality\s+notice\s*/i,
+  /^\s*disclaimer\s*/i,
+  /^\s*this\s+email\s+is\s+(confidential|private)/i,
+  /^\s*please\s+consider\s+the\s+environment/i,
+  /^\s*sent\s+from\s+my\s+/i,
+];
+
+/**
+ * Post-process parsed result: cap location length, stop at sentence boundary,
+ * remove long trailing disclaimers. Does not mutate input.
+ * Call after parseEmail(), before validation and ticket creation.
+ */
+export function sanitizeParsedLocation(parsed) {
+  if (!parsed || typeof parsed !== 'object') return parsed;
+  let loc = parsed.location;
+  if (loc == null || typeof loc !== 'string') return { ...parsed };
+  let s = loc.replace(/\s+/g, ' ').trim();
+  if (s.length <= LOCATION_MAX_LEN) return { ...parsed, location: s || parsed.location };
+
+  s = s.slice(0, LOCATION_MAX_LEN);
+  const lastSentence = s.match(/\.[^\s]*$/);
+  if (lastSentence) {
+    const idx = s.lastIndexOf(lastSentence[0]);
+    s = s.slice(0, idx + 1).trim();
+  }
+  for (const re of DISCLAIMER_STARTERS) {
+    const idx = s.search(re);
+    if (idx > 20) s = s.slice(0, idx).trim();
+  }
+  return { ...parsed, location: s || parsed.location };
+}
+
 export function parseEmailFromText(text) {
   const result = {
     complaint_id: null,
