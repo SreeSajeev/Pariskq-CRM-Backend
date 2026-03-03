@@ -3,6 +3,7 @@ import { getEmailText } from '../utils/emailParser.js';
 
 const FIELD_LABELS = [
   'Category',
+  'Description',
   'Issue type',
   'Item Name',
   'Location',
@@ -85,7 +86,7 @@ export function parseEmail(raw) {
   result.category = extractField('Category', text);
   result.issue_type = extractField('Issue type', text) || extractField('Item Name', text);
   result.location = extractField('Location', text);
-  result.remarks = extractField('Remarks', text);
+  result.remarks = extractField('Remarks', text) || extractField('Description', text);
   result.reported_at = extractField('Reported At', text);
 
   if (!result.complaint_id) parse_errors.push('complaint_id missing');
@@ -152,7 +153,7 @@ export function parseEmailFromText(text) {
   result.category = extractField('Category', normalized);
   result.issue_type = extractField('Issue type', normalized) || extractField('Item Name', normalized);
   result.location = extractField('Location', normalized);
-  result.remarks = extractField('Remarks', normalized);
+  result.remarks = extractField('Remarks', normalized) || extractField('Description', normalized);
   result.reported_at = extractField('Reported At', normalized);
   return result;
 }
