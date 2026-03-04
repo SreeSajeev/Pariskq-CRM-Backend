@@ -2,10 +2,12 @@
  * SMS service — Fast2SMS QuickSMS (bulkV2).
  * Endpoint: https://www.fast2sms.com/dev/bulkV2
  * Params: authorization, route, message, numbers (10-digit), flash=0
- * Uses env: FAST2SMS_API_KEY (required), FAST2SMS_BASE_URL (optional), FAST2SMS_ROUTE, FRONTEND_URL.
+ * Uses env: FAST2SMS_API_KEY (required), FAST2SMS_BASE_URL (optional), FAST2SMS_ROUTE.
+ * FE action links use APP_BASE_URL from appConfig.
  */
 
 import axios from "axios";
+import { APP_BASE_URL } from "../config/appConfig.js";
 
 const FAST2SMS_BULK_V2 = "https://www.fast2sms.com/dev/bulkV2";
 
@@ -15,8 +17,7 @@ const FAST2SMS_BULK_V2 = "https://www.fast2sms.com/dev/bulkV2";
  * @returns {string}
  */
 export function buildFEActionURL(tokenId) {
-  const base = (process.env.FRONTEND_URL || process.env.APP_URL || "https://opsxbypariskq.vercel.app").replace(/\/$/, "");
-  return `${base}/fe/action/${tokenId}`;
+  return `${APP_BASE_URL}/fe/action/${tokenId}`;
 }
 
 /**

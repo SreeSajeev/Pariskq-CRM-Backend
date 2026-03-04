@@ -17,6 +17,7 @@ import adminUsersRouter from "./routes/adminUsers.js";
 import { uploadFeProof } from "./controllers/proofController.js";
 import { createActionToken } from "./services/tokenService.js";
 import { sendFESms, buildFEActionURL } from "./services/smsService.js";
+import { APP_BASE_URL } from "./config/appConfig.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,18 +26,21 @@ const PORT = process.env.PORT || 3000;
    GLOBAL MIDDLEWARE
 ====================================================== */
 
-// ✅ Proper CORS configuration (Express 5 safe)
-// Include Vite dev ports so frontend (e.g. localhost:8080) can call backend (e.g. localhost:3000)
+// CORS: allow frontend app origin (APP_BASE_URL) + dev origins
+const corsOrigins = [
+  APP_BASE_URL,
+  "https://opsxbypariskq.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:8080",
+  "http://localhost:5173",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:8080",
+  "http://127.0.0.1:5173",
+].filter((o, i, a) => a.indexOf(o) === i);
+
 app.use(
   cors({
-    origin: [
-      "https://opsxbypariskq.vercel.app",
-      "http://localhost:3000",
-      "http://localhost:8080",
-      "http://localhost:5173",
-      "http://127.0.0.1:8080",
-      "http://127.0.0.1:5173",
-    ],
+    origin: corsOrigins,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,

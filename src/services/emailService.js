@@ -1,5 +1,6 @@
 // src/services/emailService.js
 import { supabase } from "../supabaseClient.js";
+import { APP_BASE_URL } from "../config/appConfig.js";
 
 const POSTMARK_URL = "https://api.postmarkapp.com/email";
 
@@ -263,8 +264,7 @@ export async function sendFETokenEmail({ feId, ticketNumber, token, type }) {
     console.log("[FE TOKEN EMAIL] FE found email=", fe.email);
 
     const actionLabel = type === "RESOLUTION" ? "Resolution" : "On-Site";
-    const baseUrl = (process.env.APP_URL || process.env.FRONTEND_URL || "https://opsxbypariskq.vercel.app").replace(/\/$/, "");
-    const actionUrl = `${baseUrl}/fe/action/${token}`;
+    const actionUrl = `${APP_BASE_URL}/fe/action/${token}`;
     const subjectTag = generateTicketSubjectTag(ticketNumber);
 
     await sendEmail(
