@@ -1,5 +1,5 @@
 // /services/parsingService.js
-import { getEmailText } from '../utils/emailParser.js';
+import { getEmailText, decodeIfBase64 } from '../utils/emailParser.js';
 
 const FIELD_LABELS = [
   'Category',
@@ -10,8 +10,16 @@ const FIELD_LABELS = [
   'Remarks',
   'Reported At',
   'Incident Title',
-  'Vehicle number'
+  'Vehicle number',
+  'Complaint ID',
+  'Record ID',
+  'Incident Number',
 ];
+
+/** Indian vehicle number (e.g. TS09UD4043, MH12AB1234, GA07T2690) */
+const VEHICLE_REGEX = /\b([A-Z]{2}\d{1,2}[A-Z]{1,2}\d{3,4})\b/;
+/** 10-digit contact number */
+const CONTACT_NUMBER_REGEX = /\b(\d{10})\b/;
 
 /**
  * Extract complaint ID (CCM format)
@@ -32,6 +40,24 @@ function extractVehicle(text) {
 }
 
 /**
+ * Fallback: extract first Indian-style vehicle from text (no "VEHICLE" prefix).
+ */
+function extractVehicleFromText(text) {
+  if (!text || typeof text !== 'string') return null;
+  const match = text.match(VEHICLE_REGEX);
+  return match ? match[1].toUpperCase() : null;
+}
+
+/**
+ * Extract first 10-digit contact number from text.
+ */
+function extractContactNumber(text) {
+  if (!text || typeof text !== 'string') return null;
+  const match = text.match(CONTACT_NUMBER_REGEX);
+  return match ? match[1] : null;
+}
+
+/**
  * Order-independent label extraction
  */
 function extractField(label, text) {
@@ -48,54 +74,175 @@ function extractField(label, text) {
   return match ? match[1].trim() : null;
 }
 
+/**
+ * Strip HTML tags from a string.
+ */
+function stripHtml(html) {
+  if (html == null || typeof html !== 'string') return '';
+  return String(html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Extract structured key-value pairs from HTML table (e.g. <td>Record ID</td><td>CCM0028060828</td>).
+ * Maps to parser fields: complaint_id, category, issue_type, remarks, location, contact_number, reported_at.
+ * Also extracts vehicle_number from remarks using Indian plate regex.
+ */
+function extractStructuredHTMLFields(raw) {
+  const out = {
+    complaint_id: null,
+    vehicle_number: null,
+    category: null,
+    issue_type: null,
+    location: null,
+    remarks: null,
+    reported_at: null,
+    contact_number: null,
+  };
+
+  let payload = raw?.payload;
+  if (typeof payload === 'string') {
+    try {
+      payload = JSON.parse(payload);
+    } catch {
+      return out;
+    }
+  }
+  let html = payload?.HtmlBody || payload?.htmlBody || '';
+  if (typeof html !== 'string') html = '';
+  const rawHtml = decodeIfBase64(html).trim();
+  if (!rawHtml) return out;
+
+  const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+  const cells = [];
+  let m;
+  while ((m = tdRegex.exec(rawHtml)) !== null) {
+    cells.push(stripHtml(m[1]).trim());
+  }
+
+  const labelToValue = {};
+  for (let i = 0; i + 1 < cells.length; i += 2) {
+    const label = cells[i];
+    const value = cells[i + 1];
+    if (label && value !== undefined) labelToValue[label] = value;
+  }
+
+  const get = (... keys) => {
+    for (const k of keys) {
+      const v = labelToValue[k];
+      if (v != null && String(v).trim() !== '') return String(v).trim();
+    }
+    return null;
+  };
+
+  out.complaint_id = get('Record ID', 'Incident Number') || null;
+  out.category = get('Category') || null;
+  out.issue_type = get('Item Name', 'Incident Title') || null;
+  out.remarks = get('Remarks') || null;
+  out.location = get('Location') || null;
+  out.contact_number = get('Contact Numbers', 'Contact Number') || null;
+  const submitDate = get('Submit Date');
+  const submitTime = get('Submit Time');
+  if (submitDate || submitTime) {
+    out.reported_at = [submitDate, submitTime].filter(Boolean).join(' ').trim() || null;
+  }
+
+  if (out.remarks && !out.vehicle_number) {
+    out.vehicle_number = extractVehicleFromText(out.remarks);
+  }
+
+  return out;
+}
+
+/**
+ * Safe parser output when parsing fails.
+ */
+function safeParserOutput(parse_errors = ['parser_error']) {
+  return {
+    complaint_id: null,
+    vehicle_number: null,
+    category: null,
+    issue_type: null,
+    location: null,
+    remarks: null,
+    reported_at: null,
+    contact_number: null,
+    parse_errors: [...parse_errors],
+    attachments: [],
+  };
+}
+
 export function parseEmail(raw) {
   const parse_errors = [];
 
-  const result = {
-    complaint_id: null,
-    vehicle_number: null,
-    issue_type: null,
-    category: null,
-    location: null,
-    reported_at: null,
-    remarks: null,
-    attachments: [],
-    parse_errors,
-  };
-
-  let text;
-
   try {
-    text = getEmailText(raw);
-  } catch {
-    parse_errors.push('Failed to extract email body');
+    let text = getEmailText(raw);
+    if (!text) {
+      parse_errors.push('Email body empty');
+      return { ...safeParserOutput(parse_errors), parse_errors };
+    }
+
+    text = cleanEmailBody(text);
+    if (!text) {
+      parse_errors.push('Email body empty after cleaning');
+      return { ...safeParserOutput(parse_errors), parse_errors };
+    }
+
+    text = text.replace(/\s+/g, ' ').trim();
+
+    const result = {
+      complaint_id: null,
+      vehicle_number: null,
+      issue_type: null,
+      category: null,
+      location: null,
+      reported_at: null,
+      remarks: null,
+      contact_number: null,
+      attachments: [],
+      parse_errors,
+    };
+
+    result.complaint_id = extractComplaintId(text);
+    if (!result.complaint_id) {
+      result.complaint_id =
+        extractField('Complaint ID', text) ||
+        extractField('Record ID', text) ||
+        extractField('Incident Number', text) ||
+        null;
+    }
+
+    result.vehicle_number = extractVehicle(text) || extractField('Vehicle number', text);
+    if (!result.vehicle_number) result.vehicle_number = extractVehicleFromText(text);
+
+    result.category = extractField('Category', text);
+    result.issue_type = extractField('Issue type', text) || extractField('Item Name', text);
+    result.location = extractField('Location', text);
+
+    const rawRemarks = extractField('Remarks', text) || extractField('Description', text);
+    result.remarks = rawRemarks ? String(rawRemarks).trim() : null;
+    result.reported_at = extractField('Reported At', text);
+    result.contact_number = extractContactNumber(text);
+
+    const htmlFields = extractStructuredHTMLFields(raw);
+    if (htmlFields.complaint_id && !result.complaint_id) result.complaint_id = htmlFields.complaint_id;
+    if (htmlFields.vehicle_number && !result.vehicle_number) result.vehicle_number = htmlFields.vehicle_number;
+    if (htmlFields.category && !result.category) result.category = htmlFields.category;
+    if (htmlFields.issue_type && !result.issue_type) result.issue_type = htmlFields.issue_type;
+    if (htmlFields.location && !result.location) result.location = htmlFields.location;
+    if (htmlFields.remarks && !result.remarks) result.remarks = htmlFields.remarks;
+    if (htmlFields.reported_at && !result.reported_at) result.reported_at = htmlFields.reported_at;
+    if (htmlFields.contact_number && !result.contact_number) result.contact_number = htmlFields.contact_number;
+
+    if (!result.complaint_id) parse_errors.push('complaint_id missing');
+    if (!result.vehicle_number) parse_errors.push('vehicle_number missing');
+    if (!result.issue_type) parse_errors.push('issue_type missing');
+    if (!result.category) parse_errors.push('category missing');
+    if (!result.location) parse_errors.push('location missing');
+
     return result;
+  } catch (err) {
+    return safeParserOutput(['parser_error']);
   }
-
-  if (!text) {
-    parse_errors.push('Email body empty');
-    return result;
-  }
-
-  // Normalize aggressively for flattened emails
-  text = text.replace(/\s+/g, ' ').trim();
-
-  result.complaint_id = extractComplaintId(text);
-  result.vehicle_number = extractVehicle(text) || extractField('Vehicle number', text);
-
-  result.category = extractField('Category', text);
-  result.issue_type = extractField('Issue type', text) || extractField('Item Name', text);
-  result.location = extractField('Location', text);
-  result.remarks = extractField('Remarks', text) || extractField('Description', text);
-  result.reported_at = extractField('Reported At', text);
-
-  if (!result.complaint_id) parse_errors.push('complaint_id missing');
-  if (!result.vehicle_number) parse_errors.push('vehicle_number missing');
-  if (!result.issue_type) parse_errors.push('issue_type missing');
-  if (!result.category) parse_errors.push('category missing');
-  if (!result.location) parse_errors.push('location missing');
-
-  return result;
 }
 
 /** Max length for location before cap/sentence trim. */
@@ -175,6 +322,7 @@ const BODY_STOP_PATTERNS = [
   /^\s*Best\s+Regards/i,
   /^\s*Regards\s*$/i,
   /^\s*--\s*$/,
+  /^\s*-{3,}\s*$/,  // ---- or ----------- etc.
   /^\s*Disclaimer\s*:/i,
   /^\s*On\s+Mon\s*,/i,
   /^\s*On\s+Tue\s*,/i,
@@ -251,6 +399,25 @@ function removeValue(text, value) {
   return text.split(v).join(' ').replace(/\s+/g, ' ').trim();
 }
 
+/** Line starts with one of these labels → strip that line so we don't re-inject into remarks. */
+const REMARKS_LABEL_LINE_STARTERS = /^(Complaint ID|Vehicle Number|Location|Category|Issue type|Item Name|Description|Remarks|Contact Number|Submitted By|Submit Date|Submit Time)\s*[:\-]?\s*/i;
+
+/**
+ * Remove lines that start with known structured labels (so we don't re-inject them into remarks).
+ * @param {string} text
+ * @returns {string}
+ */
+function stripLabelLinesFromRemainder(text) {
+  if (!text || typeof text !== 'string') return '';
+  const lines = text.split(/\r?\n/);
+  const kept = lines.filter((line) => {
+    const t = line.trim();
+    if (!t) return true;
+    return !REMARKS_LABEL_LINE_STARTERS.test(t);
+  });
+  return kept.join(' ').replace(/\s+/g, ' ').trim();
+}
+
 /** Indian vehicle registration pattern for fallback when extractField has no Vehicle number. */
 const VEHICLE_FALLBACK_REGEX = /\b([A-Z]{2}\d{1,2}[A-Z]{0,2}\d{3,4})\b/;
 
@@ -274,6 +441,16 @@ export function normalizeParsedTicket(parsed, raw) {
       fullText = '';
     }
     const cleanedBody = fullText && typeof fullText === 'string' ? cleanEmailBody(fullText) : '';
+    const normalizedFullText = fullText && typeof fullText === 'string' ? fullText.replace(/\s+/g, ' ').trim() : '';
+
+    // 0) Complaint ID fallback: if parser did not set it (e.g. no CCM format), try label aliases
+    if (!out.complaint_id || String(out.complaint_id).trim() === '') {
+      const fromComplaintId = normalizedFullText ? extractField('Complaint ID', normalizedFullText) : null;
+      const fromRecordId = normalizedFullText ? extractField('Record ID', normalizedFullText) : null;
+      const fromIncidentNumber = normalizedFullText ? extractField('Incident Number', normalizedFullText) : null;
+      const fallback = fromComplaintId || fromRecordId || fromIncidentNumber;
+      if (fallback && String(fallback).trim()) out.complaint_id = String(fallback).trim();
+    }
 
     // 1) Location overflow: split at boundary, keep first segment as location, append overflow to remarks
     let loc = parsed.location;
@@ -293,11 +470,14 @@ export function normalizeParsedTicket(parsed, raw) {
       }
     }
 
-    // 2) Append meaningful leftover from cleaned email body (no reply chains/signatures)
-    if (cleanedBody) {
+    // 2) Append remainder from cleaned body only when parsed.remarks was empty (parser did not find Remarks/Description)
+    const hadRemarksFromParser = parsed.remarks != null && String(parsed.remarks).trim() !== '';
+    if (cleanedBody && !hadRemarksFromParser) {
       let remainder = cleanedBody.replace(/\s+/g, ' ').trim();
-      remainder = removeValue(remainder, parsed.complaint_id);
+      remainder = stripLabelLinesFromRemainder(remainder);
+      remainder = removeValue(remainder, out.complaint_id);
       remainder = removeValue(remainder, parsed.vehicle_number);
+      remainder = removeValue(remainder, out.vehicle_number);
       remainder = removeValue(remainder, parsed.category);
       remainder = removeValue(remainder, parsed.issue_type);
       remainder = removeValue(remainder, parsed.location);
@@ -338,16 +518,19 @@ export function parseEmailFromText(text) {
     location: null,
     reported_at: null,
     remarks: null,
+    contact_number: null,
   };
   if (!text || typeof text !== 'string') return result;
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return result;
   result.complaint_id = extractComplaintId(normalized);
   result.vehicle_number = extractVehicle(normalized) || extractField('Vehicle number', normalized);
+  if (!result.vehicle_number) result.vehicle_number = extractVehicleFromText(normalized);
   result.category = extractField('Category', normalized);
   result.issue_type = extractField('Issue type', normalized) || extractField('Item Name', normalized);
   result.location = extractField('Location', normalized);
   result.remarks = extractField('Remarks', normalized) || extractField('Description', normalized);
   result.reported_at = extractField('Reported At', normalized);
+  result.contact_number = extractContactNumber(normalized);
   return result;
 }

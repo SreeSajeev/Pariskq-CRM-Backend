@@ -4,7 +4,7 @@ import { Buffer } from 'buffer';
 /**
  * Robust base64 detection & decoding
  */
-function decodeIfBase64(content) {
+export function decodeIfBase64(content) {
   if (!content || typeof content !== 'string') return '';
 
   const stripped = content.replace(/\s/g, '');
@@ -73,7 +73,8 @@ function normalize(text) {
 }
 
 /**
- * Unified Email Text Extractor
+ * Unified Email Text Extractor.
+ * Content priority: 1) StrippedTextReply (reply chains removed by Postmark), 2) TextBody, 3) HtmlBody as text.
  */
 export function getEmailText(raw) {
   try {
@@ -89,6 +90,10 @@ export function getEmailText(raw) {
 
     const subject = raw?.subject || '';
 
+    const strippedReply = payload?.StrippedTextReply != null && String(payload.StrippedTextReply).trim() !== ''
+      ? String(payload.StrippedTextReply).trim()
+      : '';
+
     const textBody = decodeIfBase64(
       payload?.TextBody || payload?.textBody || ''
     );
@@ -99,10 +104,10 @@ export function getEmailText(raw) {
 
     const htmlText = htmlToText(htmlBodyDecoded);
 
+    const body = strippedReply || (textBody && textBody.trim()) || htmlText;
+
     return normalize(
-      [subject, textBody, htmlText]
-        .filter(Boolean)
-        .join('\n')
+      [subject, body].filter(Boolean).join('\n')
     );
   } catch {
     return '';

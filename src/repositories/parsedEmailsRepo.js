@@ -1,9 +1,10 @@
 import { supabase } from '../supabaseClient.js';
 
 export async function insertParsedEmail(data) {
+  const { contact_number, ...rest } = data;
   return supabase
     .from('parsed_emails')
-    .insert(data)
+    .insert(rest)
     .select()
     .single();
 }
