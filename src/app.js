@@ -36,6 +36,7 @@ const corsOrigins = [
   "http://127.0.0.1:3000",
   "http://127.0.0.1:8080",
   "http://127.0.0.1:5173",
+  "https://sahaya.pariskq.in",
 ].filter((o, i, a) => a.indexOf(o) === i);
 
 app.use(
