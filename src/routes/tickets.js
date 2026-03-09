@@ -165,7 +165,7 @@ router.post("/:id/on-site-token", async (req, res) => {
   try {
     const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
-      .select("ticket_number, vehicle_number, location")
+      .select("ticket_number, vehicle_number, location, current_assignment_id")
       .eq("id", ticketId)
       .single();
 
@@ -173,13 +173,17 @@ router.post("/:id/on-site-token", async (req, res) => {
       return res.status(404).json({ error: "Ticket not found" });
     }
 
-    const { data: assignment } = await supabase
+    if (!ticket.current_assignment_id) {
+      return res.status(400).json({ error: "Assignment missing" });
+    }
+
+    const { data: assignment, error: assignmentError } = await supabase
       .from("ticket_assignments")
       .select("fe_id")
-      .eq("ticket_id", ticketId)
+      .eq("id", ticket.current_assignment_id)
       .single();
 
-    if (!assignment) {
+    if (assignmentError || !assignment) {
       return res.status(400).json({ error: "Assignment missing" });
     }
 
