@@ -49,7 +49,7 @@ router.post("/:id/assign", async (req, res) => {
   try {
     const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
-      .select("id, ticket_number")
+      .select("id, ticket_number, vehicle_number, location")
       .eq("id", ticketId)
       .single();
 
@@ -129,14 +129,12 @@ router.post("/:id/assign", async (req, res) => {
       console.log("[ASSIGN] FE lookup for SMS feId=", feId, "error=", feErr?.message || null, "phonePresent=", phonePresent);
       if (fe?.phone != null && String(fe.phone).trim() !== "") {
         const actionUrl = buildFEActionURL(token);
-        const feName = (fe.name && String(fe.name).trim()) ? String(fe.name).trim() : "Field Executive";
-        const smsMessage = `${feName},
-Ticket ID: ${ticket.ticket_number}
-
-On-Site Action:
-${actionUrl}
-
-- Pariskq IoT Support Team`;
+        const location = ticket.location ? String(ticket.location).slice(0, 25) : "N/A";
+        const smsMessage = `TKT:${ticket.ticket_number ?? "N/A"}
+Veh:${ticket.vehicle_number ?? "N/A"}
+Loc:${location}
+Action:${actionUrl}
+-Pariskq`;
         try {
           console.log("[ASSIGN] Sending SMS to FE feId=", feId);
           await sendFESms({ phoneNumber: fe.phone, message: smsMessage });
@@ -171,7 +169,7 @@ router.post("/:id/on-site-token", async (req, res) => {
   try {
     const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
-      .select("ticket_number")
+      .select("ticket_number, vehicle_number, location")
       .eq("id", ticketId)
       .single();
 
@@ -212,17 +210,12 @@ router.post("/:id/on-site-token", async (req, res) => {
 
       if (fe?.phone && String(fe.phone).trim()) {
         const resolutionUrl = buildFEActionURL(resolutionToken);
-        const feName =
-          fe.name && String(fe.name).trim()
-            ? String(fe.name).trim()
-            : "Field Executive";
-        const smsMessage = `${feName},
-Ticket ID: ${ticket?.ticket_number || "DEMO"}
-
-Resolution Action:
-${resolutionUrl}
-
-- Pariskq IoT Support Team`;
+        const location = ticket?.location ? String(ticket.location).slice(0, 25) : "N/A";
+        const smsMessage = `TKT:${ticket?.ticket_number ?? "N/A"}
+Veh:${ticket?.vehicle_number ?? "N/A"}
+Loc:${location}
+Action:${resolutionUrl}
+-Pariskq`;
 
         console.log("📩 Sending Resolution SMS to:", fe.phone);
         console.log("📩 Resolution SMS Body:", smsMessage);

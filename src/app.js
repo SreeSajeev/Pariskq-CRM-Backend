@@ -82,7 +82,7 @@ app.post("/admin/test-fe-sms", async (req, res) => {
     }
     const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
-      .select("ticket_number")
+      .select("ticket_number, vehicle_number, location")
       .eq("id", ticketId)
       .single();
     if (ticketError || !ticket) {
@@ -94,14 +94,12 @@ app.post("/admin/test-fe-sms", async (req, res) => {
       actionType: "ON_SITE",
     });
     const actionUrl = buildFEActionURL(token);
-    const feName = (fe.name && String(fe.name).trim()) ? String(fe.name).trim() : "Field Executive";
-    const smsMessage = `${feName},
-Ticket ID: ${ticket.ticket_number}
-
-On-Site Action:
-${actionUrl}
-
-- Pariskq IoT Support Team`;
+    const location = ticket.location ? String(ticket.location).slice(0, 25) : "N/A";
+    const smsMessage = `TKT:${ticket.ticket_number ?? "N/A"}
+Veh:${ticket.vehicle_number ?? "N/A"}
+Loc:${location}
+Action:${actionUrl}
+-Pariskq`;
     const sent = await sendFESms({ phoneNumber: fe.phone, message: smsMessage });
     return res.json({
       success: sent,
@@ -126,7 +124,7 @@ app.post("/admin/test-resolution-sms", async (req, res) => {
 
     const { data: ticket, error: ticketError } = await supabase
       .from("tickets")
-      .select("ticket_number")
+      .select("ticket_number, vehicle_number, location")
       .eq("id", ticketId)
       .single();
     if (ticketError || !ticket) {
@@ -161,17 +159,12 @@ app.post("/admin/test-resolution-sms", async (req, res) => {
     });
 
     const resolutionUrl = buildFEActionURL(token);
-    const feName =
-      fe.name && String(fe.name).trim()
-        ? String(fe.name).trim()
-        : "Field Executive";
-    const smsMessage = `${feName},
-Ticket ID: ${ticket.ticket_number}
-
-Resolution Action:
-${resolutionUrl}
-
-- Pariskq IoT Support Team`;
+    const location = ticket.location ? String(ticket.location).slice(0, 25) : "N/A";
+    const smsMessage = `TKT:${ticket.ticket_number ?? "N/A"}
+Veh:${ticket.vehicle_number ?? "N/A"}
+Loc:${location}
+Action:${resolutionUrl}
+-Pariskq`;
 
     console.log("📩 Sending Resolution SMS to:", fe.phone);
     console.log("📩 Resolution SMS Body:", smsMessage);
