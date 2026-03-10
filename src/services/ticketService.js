@@ -136,32 +136,37 @@ export async function createTicket(parsed, rawEmail, options = {}) {
   if (status === 'NEEDS_REVIEW') {
     const missingDetails = deriveMissingDetails(parsed)
     const receivedDetails = deriveReceivedDetails(parsed)
-    sendMissingDetailsEmail({
-      toEmail: senderEmail,
-      ticketNumber,
-      missingDetails,
-      receivedDetails,
-      subject: rawEmail?.subject || null,
-      complaintId: parsed.complaint_id,
-      category: parsed.category,
-      issueType: parsed.issue_type,
-      location: parsed.location,
-    }).catch(err => {
+    console.log('[EMAIL] Sending missing-details to requester', { toEmail: senderEmail, ticketNumber })
+    try {
+      await sendMissingDetailsEmail({
+        toEmail: senderEmail,
+        ticketNumber,
+        missingDetails,
+        receivedDetails,
+        subject: rawEmail?.subject || null,
+        complaintId: parsed.complaint_id,
+        category: parsed.category,
+        issueType: parsed.issue_type,
+        location: parsed.location,
+      })
+    } catch (err) {
       console.error('[EMAIL:MISSING_DETAILS]', { ticketNumber, message: err.message })
-    })
+    }
   } else {
-    console.log('EMAIL_TRIGGER_TICKET_CREATED', senderEmail, 'ticketNumber=', ticketNumber)
-    sendTicketConfirmation({
-      toEmail: senderEmail,
-      ticketNumber,
-      complaintId: parsed.complaint_id,
-      vehicleNumber: parsed.vehicle_number,
-      category: parsed.category,
-      issueType: parsed.issue_type,
-      location: parsed.location,
-    }).catch(err => {
+    console.log('[EMAIL] Sending ticket confirmation to requester', { toEmail: senderEmail, ticketNumber })
+    try {
+      await sendTicketConfirmation({
+        toEmail: senderEmail,
+        ticketNumber,
+        complaintId: parsed.complaint_id,
+        vehicleNumber: parsed.vehicle_number,
+        category: parsed.category,
+        issueType: parsed.issue_type,
+        location: parsed.location,
+      })
+    } catch (err) {
       console.error('[EMAIL:TICKET_CONFIRMATION]', { ticketNumber, message: err.message })
-    })
+    }
   }
 
   return {
