@@ -4,18 +4,31 @@ import { APP_BASE_URL } from "../config/appConfig.js";
 
 const POSTMARK_URL = "https://api.postmarkapp.com/email";
 
+/** From address: FROM_EMAIL or MAIL_FROM_EMAIL (trimmed). */
+function getFromEmail() {
+  const v = process.env.FROM_EMAIL || process.env.MAIL_FROM_EMAIL;
+  return v != null && String(v).trim() !== "" ? String(v).trim() : null;
+}
+
+/** From header value: "Name <email>" if MAIL_FROM_NAME set, else email. */
+function getFromAddress() {
+  const email = getFromEmail();
+  if (!email) return null;
+  const name = process.env.MAIL_FROM_NAME && String(process.env.MAIL_FROM_NAME).trim();
+  return name ? `${name} <${email}>` : email;
+}
+
 function canSendEmail() {
-  return Boolean(
-    process.env.POSTMARK_SERVER_TOKEN &&
-    process.env.FROM_EMAIL
-  );
+  const token = process.env.POSTMARK_SERVER_TOKEN && String(process.env.POSTMARK_SERVER_TOKEN).trim();
+  return Boolean(token && getFromEmail());
 }
 
 /** Temporary: log env presence for debugging (no secret values). */
 function logEmailEnvStatus(tag) {
   const hasToken = Boolean(process.env.POSTMARK_SERVER_TOKEN && String(process.env.POSTMARK_SERVER_TOKEN).trim());
-  const hasFrom = Boolean(process.env.FROM_EMAIL && String(process.env.FROM_EMAIL).trim());
-  console.log(`[EMAIL ENV] ${tag} — POSTMARK_SERVER_TOKEN=${hasToken ? "set" : "MISSING"}, FROM_EMAIL=${hasFrom ? "set" : "MISSING"}`);
+  const fromEmail = getFromEmail();
+  const hasFrom = Boolean(fromEmail);
+  console.log(`[EMAIL ENV] ${tag} — POSTMARK_SERVER_TOKEN=${hasToken ? "set" : "MISSING"}, FROM=${hasFrom ? "set" : "MISSING"} (FROM_EMAIL/MAIL_FROM_EMAIL)`);
 }
 
 function isValidTicketNumber(ticketNumber) {
@@ -39,21 +52,23 @@ function formatDetail(value) {
 
 async function sendEmail(payload, tag) {
   logEmailEnvStatus(tag);
-  if (!canSendEmail()) {
-    const msg = `Email not configured: missing POSTMARK_SERVER_TOKEN or FROM_EMAIL`;
+  const fromAddr = getFromAddress();
+  if (!canSendEmail() || !fromAddr) {
+    const msg = `Email not configured: missing POSTMARK_SERVER_TOKEN or FROM_EMAIL/MAIL_FROM_EMAIL`;
     console.error(`[EMAIL SKIPPED] ${tag} — ${msg}`);
     return;
   }
+  const payloadWithFrom = { ...payload, From: fromAddr };
 
   try {
-    console.log(">>> About to call Postmark");
+    console.log(`[EMAIL_TRIGGER] ${tag} To=${payloadWithFrom.To}`);
     const res = await fetch(POSTMARK_URL, {
       method: "POST",
       headers: {
         "X-Postmark-Server-Token": process.env.POSTMARK_SERVER_TOKEN,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payloadWithFrom),
     });
 
     const text = await res.text();
@@ -61,7 +76,7 @@ async function sendEmail(payload, tag) {
       console.error(`[EMAIL FAILED] ${tag} status=${res.status} body=`, text);
       return;
     }
-    console.log(`[EMAIL SENT] ${tag} To=${payload.To}`);
+    console.log(`[EMAIL SENT] ${tag} To=${payloadWithFrom.To}`);
   } catch (err) {
     console.error(`[EMAIL ERROR] ${tag}`, err.message);
   }
@@ -119,7 +134,6 @@ Short issue summary: ${formatDetail(shortSummary)}
 
     await sendEmail(
       {
-        From: process.env.FROM_EMAIL,
         To: toEmail.trim(),
         Subject: `Complaint Received - Ticket ${String(ticketNumber).trim()}`,
         TextBody: textBody,
@@ -179,7 +193,6 @@ Pariskq Operations Team
 
     await sendEmail(
       {
-        From: process.env.FROM_EMAIL,
         To: toEmail.trim(),
         Subject: `Re: ${subjectTag} Additional Details Required`,
         TextBody: body,
@@ -219,9 +232,9 @@ export async function sendFEAssignmentEmail({
     console.log("[FE ASSIGN EMAIL] FE found email=", fe.email, "name=", fe.name || "(none)");
 
     const subjectTag = generateTicketSubjectTag(ticketNumber);
+    console.log("EMAIL_TRIGGER_ASSIGNMENT", fe.email, "ticketNumber=", ticketNumber);
     await sendEmail(
       {
-        From: process.env.FROM_EMAIL,
         To: fe.email,
         Subject: `New Ticket Assigned - ${subjectTag}`,
         TextBody: `
@@ -266,10 +279,10 @@ export async function sendFETokenEmail({ feId, ticketNumber, token, type }) {
     const actionLabel = type === "RESOLUTION" ? "Resolution" : "On-Site";
     const actionUrl = `${APP_BASE_URL}/fe/action/${token}`;
     const subjectTag = generateTicketSubjectTag(ticketNumber);
+    console.log("EMAIL_TRIGGER_FE_TOKEN", fe.email, "type=", type, "ticketNumber=", ticketNumber);
 
     await sendEmail(
       {
-        From: process.env.FROM_EMAIL,
         To: fe.email,
         Subject: `${actionLabel} proof required - ${subjectTag}`,
         TextBody: `
@@ -339,9 +352,9 @@ Pariskq Operations Team
     ) {
       textBody += `\n\nStaff Verification Notes:\n${String(verificationRemarks).trim()}`;
     }
+    console.log("EMAIL_TRIGGER_RESOLUTION", toEmail, "ticketNumber=", ticketNumber);
     await sendEmail(
       {
-        From: process.env.FROM_EMAIL,
         To: toEmail.trim(),
         Subject: `Ticket Resolved - ${subjectTag}`,
         TextBody: textBody,

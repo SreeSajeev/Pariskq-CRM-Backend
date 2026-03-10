@@ -150,6 +150,7 @@ export async function createTicket(parsed, rawEmail, options = {}) {
       console.error('[EMAIL:MISSING_DETAILS]', { ticketNumber, message: err.message })
     })
   } else {
+    console.log('EMAIL_TRIGGER_TICKET_CREATED', senderEmail, 'ticketNumber=', ticketNumber)
     sendTicketConfirmation({
       toEmail: senderEmail,
       ticketNumber,

@@ -243,10 +243,11 @@ app.post("/internal/ticket-resolved", async (req, res) => {
       return res.status(200).json({ ignored: "email already sent" });
     }
 
+    console.log("EMAIL_TRIGGER_TICKET_RESOLVED_HOOK", ticket.opened_by_email, "ticketNumber=", ticket.ticket_number);
     await sendResolutionEmail({
       toEmail: ticket.opened_by_email,
       ticketNumber: ticket.ticket_number,
-    });
+    }).catch((e) => console.error("[ticket-resolved-hook] Resolution email failed:", e?.message || e));
 
     await supabase
       .from("ticket_resolution_notifications")

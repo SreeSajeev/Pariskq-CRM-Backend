@@ -88,7 +88,7 @@ router.post("/:id/assign", async (req, res) => {
     );
 
     console.log("[ASSIGN] Sending FE assignment email feId=", feId, "ticketNumber=", ticket.ticket_number);
-    sendFEAssignmentEmail({
+    await sendFEAssignmentEmail({
       feId,
       ticketNumber: ticket.ticket_number,
     }).catch((e) => console.error("[ASSIGN] FE assignment email failed:", e?.message || e));
@@ -101,7 +101,7 @@ router.post("/:id/assign", async (req, res) => {
     });
 
     console.log("[ASSIGN] Sending FE token email feId=", feId, "type=ON_SITE");
-    sendFETokenEmail({
+    await sendFETokenEmail({
       feId,
       ticketNumber: ticket.ticket_number,
       token,
@@ -193,12 +193,13 @@ router.post("/:id/on-site-token", async (req, res) => {
       actionType: "RESOLUTION",
     });
 
-    sendFETokenEmail({
+    console.log("[ON_SITE_TOKEN] Sending Resolution token email feId=", assignment.fe_id);
+    await sendFETokenEmail({
       feId: assignment.fe_id,
       ticketNumber: ticket?.ticket_number || "DEMO",
       token: resolutionToken,
       type: "RESOLUTION",
-    }).catch(console.error);
+    }).catch((e) => console.error("[ON_SITE_TOKEN] FE token email failed:", e?.message || e));
 
     // Optional: Resolution SMS to FE (does not block flow)
     try {
@@ -305,6 +306,7 @@ router.post("/:id/close", async (req, res) => {
     }
 
     if (ticket.opened_by_email) {
+      console.log("EMAIL_TRIGGER_CLOSE_RESOLUTION", ticket.opened_by_email, "ticketNumber=", ticket.ticket_number);
       await sendResolutionEmail({
         toEmail: ticket.opened_by_email,
         ticketNumber: ticket.ticket_number,
@@ -315,7 +317,7 @@ router.post("/:id/close", async (req, res) => {
         category: ticket.category ?? null,
         issueType: ticket.issue_type ?? null,
         location: ticket.location ?? null,
-      });
+      }).catch((e) => console.error("[CLOSE] Resolution email failed:", e?.message || e));
     }
 
     return res.json({ success: true });
